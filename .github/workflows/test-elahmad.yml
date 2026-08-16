@@ -39,3 +39,11 @@ jobs:
           CHROMEDRIVER_PATH: ${{ steps.setup-chrome.outputs.chromedriver-path }}
         run: |
           python test_elahmad.py
+
+          - name: Upload Elahmad diagnostic files
+  uses: actions/upload-artifact@v4
+  with:
+    name: elahmad-debug
+    path: |
+      elahmad_debug.txt
+      elahmad_page.html
