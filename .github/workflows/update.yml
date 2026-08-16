@@ -2,53 +2,161 @@ name: Auto Update IPTV List
 
 on:
   schedule:
-    - cron: '0 * * * *'
+    # Run once every hour
+    - cron: "0 * * * *"
 
+  # Also lets you press "Run workflow" manually
   workflow_dispatch:
+
 
 permissions:
   contents: write
+
+
+# Prevent two updater runs from writing
+# playlist.m3u at the same time
+concurrency:
+  group: iptv-auto-update
+  cancel-in-progress: false
+
 
 jobs:
 
   update-list:
 
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 10
+
 
     steps:
 
-      - name: Hent repository
+      # ======================================================
+      # 1. DOWNLOAD YOUR REPOSITORY
+      # ======================================================
+
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Sæt Python op
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
 
-      - name: Installer Selenium
+      # ======================================================
+      # 2. PYTHON
+      # ======================================================
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+
+        with:
+          python-version: "3.12"
+
+
+      # ======================================================
+      # 3. INSTALL MATCHING CHROME + CHROMEDRIVER
+      # ======================================================
+
+      - name: Install Chrome and ChromeDriver
+        id: setup-chrome
+
+        uses: browser-actions/setup-chrome@v2
+
+        with:
+
+          chrome-version: stable
+
+          install-chromedriver: true
+
+          install-dependencies: true
+
+
+      # ======================================================
+      # 4. SHOW VERSIONS
+      #
+      # Helpful if something ever breaks later.
+      # ======================================================
+
+      - name: Show browser versions
+
         run: |
+
+          echo "Chrome:"
+
+          "${{ steps.setup-chrome.outputs.chrome-path }}" --version
+
+          echo "ChromeDriver:"
+
+          "${{ steps.setup-chrome.outputs.chromedriver-path }}" --version
+
+
+      # ======================================================
+      # 5. INSTALL SELENIUM
+      # ======================================================
+
+      - name: Install Python dependencies
+
+        run: |
+
           python -m pip install --upgrade pip
+
           pip install selenium
 
-      - name: Vis Chrome-versioner
-        run: |
-          google-chrome --version
-          chromedriver --version
 
-      - name: Kør IPTV stream scanner
+      # ======================================================
+      # 6. RUN OUR IPTV SCANNER
+      # ======================================================
+
+      - name: Scan live channels and update playlist
+
+        env:
+
+          CHROME_BINARY: ${{ steps.setup-chrome.outputs.chrome-path }}
+
+          CHROMEDRIVER_PATH: ${{ steps.setup-chrome.outputs.chromedriver-path }}
+
         run: |
+
           python updater.py
 
-      - name: Gem ny playlist
+
+      # ======================================================
+      # 7. SHOW RESULT IN ACTION LOG
+      # ======================================================
+
+      - name: Show generated playlist
+
         run: |
+
+          echo "=============================="
+
+          echo "FINAL playlist.m3u"
+
+          echo "=============================="
+
+          cat playlist.m3u
+
+
+      # ======================================================
+      # 8. SAVE playlist.m3u BACK TO GITHUB
+      # ======================================================
+
+      - name: Commit updated playlist
+
+        run: |
+
           git config user.name "GitHub Action"
+
           git config user.email "action@github.com"
 
           git add playlist.m3u
 
+
           if git diff --cached --quiet; then
-            echo "Ingen ændringer i playlist.m3u"
+
+            echo "No playlist changes detected."
+
           else
+
             git commit -m "Update IPTV stream URLs"
+
             git push
+
           fi
