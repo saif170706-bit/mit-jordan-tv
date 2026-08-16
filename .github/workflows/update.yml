@@ -1,0 +1,29 @@
+name: Auto Update IPTV List
+
+on:
+  schedule:
+    - cron: '0 * * * *'  # Kører automatisk EN GANG HVER TIME (Døgnet rundt)
+  workflow_dispatch:     # Gør at du også selv kan starte den manuelt med en knap
+
+jobs:
+  update-list:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hent kildekoden
+        uses: actions/checkout@v4
+
+      - name: Sæt Python op
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Kør opdaterings-script
+        run: python updater.py
+
+      - name: Gem og push ændringer til mit arkiv
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add playlist.m3u
+          git diff-index --quiet HEAD || git commit -m "Automatisk token opdatering"
+          git push
