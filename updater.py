@@ -11,60 +11,19 @@ from selenium.webdriver.common.by import By
 
 
 # ============================================================
-# LOGGING
+# SETTINGS
 # ============================================================
+
+PLAYLIST_PATH = "playlist.m3u"
+
+ROYA_TV_PAGE = "https://roya.tv/live-stream/1"
+ROYA_NEWS_PAGE = "https://roya.tv/live-stream/21"
+MAMLAKA_PAGE = "https://www.almamlakatv.com/live-video"
+
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
-)
-
-
-# ============================================================
-# EXACT LIVE PAGES
-# ============================================================
-
-ROYA_TV_PAGE = "https://roya.tv/live-stream/1"
-
-ROYA_NEWS_PAGE = "https://roya.tv/live-stream/21"
-
-MAMLAKA_PAGE = "https://www.almamlakatv.com/live-video"
-
-
-# ============================================================
-# PERMANENT CHANNEL LOGOS
-# ============================================================
-
-CHANNEL_LOGOS = {
-
-    "Roya TV":
-        "https://raw.githubusercontent.com/saif170706-bit/mit-jordan-tv/main/Roya-tv.webp",
-
-    "Roya News":
-        "https://raw.githubusercontent.com/saif170706-bit/mit-jordan-tv/main/Roya-news.webp",
-
-    "Al Mamlaka TV":
-        "https://raw.githubusercontent.com/saif170706-bit/mit-jordan-tv/main/Almamlaka.png"
-}
-
-
-# ============================================================
-# KNOWN WORKING AL MAMLAKA FALLBACK
-#
-# Priority:
-#
-# 1. Fresh URL found now
-# 2. Previous URL already in playlist.m3u
-# 3. This confirmed working URL
-# ============================================================
-
-KNOWN_MAMLAKA_FALLBACK = (
-    "https://fastly.live.brightcove.com/"
-    "6376826200112/eu-central-1/6415809151001/"
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
-    "eyJob3N0IjoieWlod3RhLmVncmVzcy5haGc3NmwiLCJhY2NvdW50X2lkIjoiNjQxNTgwOTE1MTAwMSIsImVobiI6ImZhc3RseS5saXZlLmJyaWdodGNvdmUuY29tIiwiaXNzIjoiYmxpdmUtcGxheWJhY2stc291cmNlLWFwaSIsInN1YiI6InBhdGhtYXB0b2tlbiIsImF1ZCI6WyI2NDE1ODA5MTUxMDAxIl0sImp0aSI6IjYzNzY4MjYyMDAxMTIifQ."
-    "EBaDAQiDkyoRKYIjLROyrZzKFPcftOUxk4ftmhtVsEk/"
-    "playlist-hls-dvr.m3u8"
 )
 
 
@@ -84,26 +43,16 @@ def create_driver():
     options.add_argument("--autoplay-policy=no-user-gesture-required")
     options.add_argument("--mute-audio")
 
-    # Enable Chrome performance/network logs
     options.set_capability(
         "goog:loggingPrefs",
-        {
-            "performance": "ALL"
-        }
+        {"performance": "ALL"}
     )
 
-    # Chrome installed by GitHub Action
-    chrome_binary = os.environ.get(
-        "CHROME_BINARY"
-    )
+    chrome_binary = os.environ.get("CHROME_BINARY")
 
-    if (
-        chrome_binary
-        and os.path.exists(chrome_binary)
-    ):
+    if chrome_binary and os.path.exists(chrome_binary):
         options.binary_location = chrome_binary
 
-    # ChromeDriver installed by GitHub Action
     chromedriver_path = os.environ.get(
         "CHROMEDRIVER_PATH"
     )
@@ -112,9 +61,7 @@ def create_driver():
         chromedriver_path
         and os.path.exists(chromedriver_path)
     ):
-        service = Service(
-            chromedriver_path
-        )
+        service = Service(chromedriver_path)
     else:
         service = Service()
 
@@ -125,7 +72,6 @@ def create_driver():
 
     driver.set_page_load_timeout(60)
 
-    # Explicitly enable Network events
     try:
         driver.execute_cdp_cmd(
             "Network.enable",
@@ -138,66 +84,7 @@ def create_driver():
 
 
 # ============================================================
-# READ EXISTING PLAYLIST
-#
-# This allows us to KEEP old working links if one automatic
-# refresh fails.
-# ============================================================
-
-def load_existing_playlist(
-    path="playlist.m3u"
-):
-
-    streams = {}
-
-    if not os.path.exists(path):
-        return streams
-
-    current_channel = None
-
-    with open(
-        path,
-        "r",
-        encoding="utf-8"
-    ) as file:
-
-        for raw_line in file:
-
-            line = raw_line.strip()
-
-            if line.startswith("#EXTINF:"):
-
-                if "," in line:
-
-                    current_channel = (
-                        line
-                        .split(",", 1)[1]
-                        .strip()
-                    )
-
-            elif (
-                current_channel
-                and line.startswith(
-                    (
-                        "https://",
-                        "http://"
-                    )
-                )
-            ):
-
-                if ".m3u8" in line.lower():
-
-                    streams[
-                        current_channel
-                    ] = line
-
-                current_channel = None
-
-    return streams
-
-
-# ============================================================
-# EXTRACT URLS FROM CHROME NETWORK LOG
+# READ NETWORK URLS
 # ============================================================
 
 def network_urls_from_logs(logs):
@@ -207,7 +94,6 @@ def network_urls_from_logs(logs):
     for entry in logs:
 
         try:
-
             message = json.loads(
                 entry["message"]
             )["message"]
@@ -219,13 +105,7 @@ def network_urls_from_logs(logs):
         ):
             continue
 
-        method = message.get(
-            "method"
-        )
-
-        # ----------------------------------------------------
-        # REQUEST URL
-        # ----------------------------------------------------
+        method = message.get("method")
 
         if method == "Network.requestWillBeSent":
 
@@ -239,10 +119,6 @@ def network_urls_from_logs(logs):
             if url:
                 urls.append(url)
 
-        # ----------------------------------------------------
-        # RESPONSE URL
-        # ----------------------------------------------------
-
         elif method == "Network.responseReceived":
 
             response = (
@@ -251,15 +127,8 @@ def network_urls_from_logs(logs):
                 .get("response", {})
             )
 
-            url = response.get(
-                "url",
-                ""
-            )
-
-            status = response.get(
-                "status",
-                0
-            )
+            url = response.get("url", "")
+            status = response.get("status", 0)
 
             if (
                 url
@@ -275,18 +144,11 @@ def network_urls_from_logs(logs):
 
 # ============================================================
 # BRIGHTCOVE media_url BACKUP
-#
-# Brightcove can also expose the master stream inside:
-#
-# metrics.brightcove.com/...&media_url=...
 # ============================================================
 
 def brightcove_media_urls(url):
 
-    if (
-        "metrics.brightcove.com"
-        not in url.lower()
-    ):
+    if "metrics.brightcove.com" not in url.lower():
         return []
 
     try:
@@ -308,13 +170,7 @@ def brightcove_media_urls(url):
 # TRY TO START VIDEO
 # ============================================================
 
-def start_video_in_current_frame(
-    driver
-):
-
-    # --------------------------------------------------------
-    # Video.js buttons
-    # --------------------------------------------------------
+def start_video_in_current_frame(driver):
 
     selectors = [
         ".vjs-big-play-button",
@@ -333,91 +189,61 @@ def start_video_in_current_frame(
             for button in buttons:
 
                 try:
-
                     driver.execute_script(
                         "arguments[0].click();",
                         button
                     )
-
                 except Exception:
                     pass
 
         except Exception:
             pass
 
-    # --------------------------------------------------------
     # Native HTML5 video
-    # --------------------------------------------------------
-
     try:
 
         driver.execute_script(
             """
-            document
-                .querySelectorAll('video')
-                .forEach((v) => {
+            document.querySelectorAll('video').forEach((v) => {
+                try {
+                    v.muted = true;
+                    v.autoplay = true;
 
-                    try {
+                    const promise = v.play();
 
-                        v.muted = true;
-                        v.autoplay = true;
+                    if (promise && promise.catch) {
+                        promise.catch(() => {});
+                    }
 
-                        const promise = v.play();
-
-                        if (
-                            promise
-                            && promise.catch
-                        ) {
-                            promise.catch(
-                                () => {}
-                            );
-                        }
-
-                    } catch (e) {}
-
-                });
+                } catch (e) {}
+            });
             """
         )
 
     except Exception:
         pass
 
-    # --------------------------------------------------------
-    # Video.js API
-    # --------------------------------------------------------
-
+    # Video.js
     try:
 
         driver.execute_script(
             """
             try {
+                if (window.videojs && videojs.getPlayers) {
 
-                if (
-                    window.videojs
-                    && videojs.getPlayers
-                ) {
+                    const players = videojs.getPlayers();
 
-                    const players =
-                        videojs.getPlayers();
+                    Object.keys(players).forEach((key) => {
 
-                    Object
-                        .keys(players)
-                        .forEach((key) => {
+                        try {
+                            const player = players[key];
 
-                            try {
+                            player.muted(true);
+                            player.play();
 
-                                const player =
-                                    players[key];
-
-                                player.muted(true);
-                                player.play();
-
-                            } catch (e) {}
-
-                        });
-
+                        } catch (e) {}
+                    });
                 }
-
             } catch (e) {}
             """
         )
@@ -427,21 +253,15 @@ def start_video_in_current_frame(
 
 
 # ============================================================
-# ACTIVELY START AL MAMLAKA / BRIGHTCOVE
+# ACTIVELY START AL MAMLAKA BRIGHTCOVE
 # ============================================================
 
-def actively_start_brightcove(
-    driver
-):
+def actively_start_brightcove(driver):
 
-    # First try main page
     driver.switch_to.default_content()
 
-    start_video_in_current_frame(
-        driver
-    )
+    start_video_in_current_frame(driver)
 
-    # Then inspect iframes
     try:
 
         iframes = driver.find_elements(
@@ -450,7 +270,6 @@ def actively_start_brightcove(
         )
 
     except Exception:
-
         iframes = []
 
     logging.info(
@@ -458,32 +277,24 @@ def actively_start_brightcove(
         len(iframes)
     )
 
-    for index in range(
-        len(iframes)
-    ):
+    for index in range(len(iframes)):
 
         try:
 
             driver.switch_to.default_content()
 
-            # Reload iframe list because DOM may change
             current_iframes = driver.find_elements(
                 By.TAG_NAME,
                 "iframe"
             )
 
-            if (
-                index
-                >= len(current_iframes)
-            ):
+            if index >= len(current_iframes):
                 continue
 
             frame = current_iframes[index]
 
             src = (
-                frame.get_attribute(
-                    "src"
-                )
+                frame.get_attribute("src")
                 or ""
             )
 
@@ -493,9 +304,7 @@ def actively_start_brightcove(
                 src[:180]
             )
 
-            driver.switch_to.frame(
-                frame
-            )
+            driver.switch_to.frame(frame)
 
             start_video_in_current_frame(
                 driver
@@ -514,63 +323,35 @@ def actively_start_brightcove(
 
 # ============================================================
 # FIND AL MAMLAKA MASTER
-#
-# We specifically want:
-#
-# playlist-hls-dvr.m3u8
 # ============================================================
 
-def find_mamlaka_master(
-    logs
-):
+def find_mamlaka_master(logs):
 
-    urls = network_urls_from_logs(
-        logs
-    )
+    urls = network_urls_from_logs(logs)
 
     for url in urls:
 
         low = url.lower()
 
-        # ----------------------------------------------------
-        # METHOD 1
-        #
-        # Direct Brightcove request
-        # ----------------------------------------------------
-
+        # Direct Brightcove master request
         if (
-            "fastly.live.brightcove.com"
-            in low
+            "fastly.live.brightcove.com" in low
             and
-            "playlist-hls-dvr.m3u8"
-            in low
+            "playlist-hls-dvr.m3u8" in low
         ):
 
             logging.info(
                 "AL MAMLAKA MASTER DIRECTLY FOUND:"
             )
 
-            logging.info(
-                url
-            )
+            logging.info(url)
 
             return url
 
-        # ----------------------------------------------------
-        # METHOD 2
-        #
-        # Brightcove metrics media_url=
-        # ----------------------------------------------------
+        # Backup: media_url inside Brightcove metrics
+        for media_url in brightcove_media_urls(url):
 
-        for media_url in (
-            brightcove_media_urls(
-                url
-            )
-        ):
-
-            media_low = (
-                media_url.lower()
-            )
+            media_low = media_url.lower()
 
             if (
                 "fastly.live.brightcove.com"
@@ -584,9 +365,7 @@ def find_mamlaka_master(
                     "AL MAMLAKA MASTER FOUND IN media_url=:"
                 )
 
-                logging.info(
-                    media_url
-                )
+                logging.info(media_url)
 
                 return media_url
 
@@ -594,12 +373,10 @@ def find_mamlaka_master(
 
 
 # ============================================================
-# AL MAMLAKA SCANNER
+# SCAN AL MAMLAKA
 # ============================================================
 
-def sniff_almamlaka(
-    timeout_seconds=45
-):
+def sniff_almamlaka(timeout_seconds=45):
 
     driver = None
 
@@ -615,34 +392,19 @@ def sniff_almamlaka(
             "OPENING AL MAMLAKA:"
         )
 
-        logging.info(
-            MAMLAKA_PAGE
-        )
+        logging.info(MAMLAKA_PAGE)
 
-        driver.get(
-            MAMLAKA_PAGE
-        )
+        driver.get(MAMLAKA_PAGE)
 
-        # Allow Brightcove to initialize
         time.sleep(5)
 
-        # ----------------------------------------------------
-        # First check:
-        # maybe autoplay already requested master playlist
-        # ----------------------------------------------------
-
+        # First check
         found = find_mamlaka_master(
-            driver.get_log(
-                "performance"
-            )
+            driver.get_log("performance")
         )
 
         if found:
             return found
-
-        # ----------------------------------------------------
-        # Actively start player
-        # ----------------------------------------------------
 
         logging.info(
             "Al Mamlaka master not yet seen."
@@ -652,9 +414,7 @@ def sniff_almamlaka(
             "Actively starting Brightcove..."
         )
 
-        actively_start_brightcove(
-            driver
-        )
+        actively_start_brightcove(driver)
 
         deadline = (
             time.time()
@@ -666,14 +426,7 @@ def sniff_almamlaka(
             + 8
         )
 
-        # ----------------------------------------------------
-        # Watch network traffic
-        # ----------------------------------------------------
-
-        while (
-            time.time()
-            < deadline
-        ):
+        while time.time() < deadline:
 
             time.sleep(1)
 
@@ -685,23 +438,16 @@ def sniff_almamlaka(
                 logs
             )
 
-            # Log every M3U8 request for debugging
             for url in urls:
 
-                if (
-                    ".m3u8"
-                    in url.lower()
-                ):
+                if ".m3u8" in url.lower():
 
                     logging.info(
                         "AL MAMLAKA M3U8 SEEN:"
                     )
 
-                    logging.info(
-                        url
-                    )
+                    logging.info(url)
 
-            # Specifically locate master stream
             found = find_mamlaka_master(
                 logs
             )
@@ -714,11 +460,7 @@ def sniff_almamlaka(
 
                 return found
 
-            # Try play again every 8 seconds
-            if (
-                time.time()
-                >= next_play_attempt
-            ):
+            if time.time() >= next_play_attempt:
 
                 logging.info(
                     "Trying Brightcove playback again..."
@@ -734,8 +476,8 @@ def sniff_almamlaka(
                 )
 
         logging.warning(
-            "Al Mamlaka: no fresh playlist-hls-dvr.m3u8 "
-            "found during this run."
+            "Al Mamlaka: no fresh "
+            "playlist-hls-dvr.m3u8 found."
         )
 
         return None
@@ -755,7 +497,7 @@ def sniff_almamlaka(
 
 
 # ============================================================
-# ROYA MASTER PLAYLIST SCORING
+# SCORE ROYA URLs
 # ============================================================
 
 def roya_score(url):
@@ -767,7 +509,6 @@ def roya_score(url):
 
     score = 0
 
-    # Prefer master/top playlists
     if "playlist.m3u8" in low:
         score += 500
 
@@ -777,7 +518,6 @@ def roya_score(url):
     if "index.m3u8" in low:
         score += 300
 
-    # Known delivery systems
     if "kwikmotion" in low:
         score += 150
 
@@ -787,7 +527,6 @@ def roya_score(url):
     if "daioncdn" in low:
         score += 100
 
-    # Avoid child playlists
     if "chunklist" in low:
         score -= 500
 
@@ -798,7 +537,7 @@ def roya_score(url):
 
 
 # ============================================================
-# ROYA TV + ROYA NEWS SCANNER
+# SCAN ROYA
 # ============================================================
 
 def sniff_roya(
@@ -808,7 +547,6 @@ def sniff_roya(
 ):
 
     driver = None
-
     candidates = set()
 
     try:
@@ -824,17 +562,12 @@ def sniff_roya(
             channel_name
         )
 
-        logging.info(
-            page_url
-        )
+        logging.info(page_url)
 
-        driver.get(
-            page_url
-        )
+        driver.get(page_url)
 
         time.sleep(3)
 
-        # Attempt playback
         start_video_in_current_frame(
             driver
         )
@@ -844,10 +577,7 @@ def sniff_roya(
             + timeout_seconds
         )
 
-        while (
-            time.time()
-            < deadline
-        ):
+        while time.time() < deadline:
 
             time.sleep(1)
 
@@ -861,50 +591,26 @@ def sniff_roya(
 
             for url in urls:
 
-                # ------------------------------------------------
-                # Direct M3U8
-                # ------------------------------------------------
+                if ".m3u8" in url.lower():
 
-                if (
-                    ".m3u8"
-                    in url.lower()
-                ):
-
-                    candidates.add(
-                        url
-                    )
+                    candidates.add(url)
 
                     logging.info(
                         "%s M3U8 SEEN:",
                         channel_name
                     )
 
-                    logging.info(
-                        url
-                    )
-
-                # ------------------------------------------------
-                # media_url fallback
-                # ------------------------------------------------
+                    logging.info(url)
 
                 for media_url in (
-                    brightcove_media_urls(
-                        url
-                    )
+                    brightcove_media_urls(url)
                 ):
 
-                    if (
-                        ".m3u8"
-                        in media_url.lower()
-                    ):
+                    if ".m3u8" in media_url.lower():
 
                         candidates.add(
                             media_url
                         )
-
-            # ----------------------------------------------------
-            # Select best candidate
-            # ----------------------------------------------------
 
             if candidates:
 
@@ -913,25 +619,16 @@ def sniff_roya(
                     key=roya_score
                 )
 
-                if (
-                    roya_score(best)
-                    >= 300
-                ):
+                if roya_score(best) >= 300:
 
                     logging.info(
                         "%s MASTER SELECTED:",
                         channel_name
                     )
 
-                    logging.info(
-                        best
-                    )
+                    logging.info(best)
 
                     return best
-
-        # --------------------------------------------------------
-        # Timeout but we found something usable
-        # --------------------------------------------------------
 
         if candidates:
 
@@ -945,9 +642,7 @@ def sniff_roya(
                 channel_name
             )
 
-            logging.info(
-                best
-            )
+            logging.info(best)
 
             return best
 
@@ -974,121 +669,264 @@ def sniff_roya(
 
 
 # ============================================================
-# CHOOSE WHICH URL TO KEEP
+# IDENTIFY ONLY OUR THREE DYNAMIC CHANNELS
 #
-# Priority:
+# IMPORTANT:
 #
-# 1. Fresh URL
-# 2. Previous playlist URL
-# 3. Hard fallback for Al Mamlaka
+# Your big playlist contains another channel also called
+# "Roya TV".
+#
+# Therefore the real Roya TV is identified by:
+#
+#   tvg-name="Roya TV"
+#   group-title="Jordan"
+#
+# This prevents the other Roya TV from being modified.
 # ============================================================
 
-def choose_url(
-    channel_name,
-    fresh_url,
-    old_streams,
-    hard_fallback=None
+def is_target_channel(
+    extinf_line,
+    channel_name
 ):
 
-    if fresh_url:
+    if not extinf_line.startswith(
+        "#EXTINF:"
+    ):
+        return False
 
-        logging.info(
-            "%s: USING FRESH URL.",
-            channel_name
+    if channel_name == "Roya TV":
+
+        return (
+            'tvg-name="Roya TV"'
+            in extinf_line
+            and
+            'group-title="Jordan"'
+            in extinf_line
         )
 
-        return fresh_url
+    if channel_name == "Roya News":
 
-    previous = old_streams.get(
-        channel_name
-    )
-
-    if previous:
-
-        logging.warning(
-            "%s: fresh scan failed. KEEPING PREVIOUS URL.",
-            channel_name
+        return (
+            'tvg-name="Roya News"'
+            in extinf_line
+            and
+            'group-title="Jordan"'
+            in extinf_line
         )
 
-        return previous
+    if channel_name == "Al Mamlaka TV":
 
-    if hard_fallback:
-
-        logging.warning(
-            "%s: no previous URL exists. "
-            "USING KNOWN WORKING FALLBACK.",
-            channel_name
+        return (
+            'tvg-name="Al Mamlaka TV"'
+            in extinf_line
         )
 
-        return hard_fallback
+    return False
+
+
+# ============================================================
+# REPLACE ONLY ONE CHANNEL URL
+#
+# EVERYTHING ELSE IN playlist.m3u REMAINS UNCHANGED
+# ============================================================
+
+def replace_channel_url(
+    lines,
+    channel_name,
+    new_url
+):
+
+    for index, line in enumerate(lines):
+
+        if not is_target_channel(
+            line,
+            channel_name
+        ):
+            continue
+
+        # Find the URL belonging to this EXTINF entry
+        for url_index in range(
+            index + 1,
+            min(index + 10, len(lines))
+        ):
+
+            candidate = (
+                lines[url_index]
+                .strip()
+            )
+
+            # Reached next channel without URL
+            if candidate.startswith(
+                "#EXTINF:"
+            ):
+                break
+
+            if candidate.startswith(
+                (
+                    "https://",
+                    "http://"
+                )
+            ):
+
+                old_url = candidate
+
+                if old_url == new_url:
+
+                    logging.info(
+                        "%s: URL is already current.",
+                        channel_name
+                    )
+
+                    return True, False
+
+                # Preserve existing line ending
+                if lines[url_index].endswith(
+                    "\r\n"
+                ):
+                    ending = "\r\n"
+
+                elif lines[url_index].endswith(
+                    "\n"
+                ):
+                    ending = "\n"
+
+                else:
+                    ending = ""
+
+                lines[url_index] = (
+                    new_url
+                    + ending
+                )
+
+                logging.info(
+                    "%s URL UPDATED.",
+                    channel_name
+                )
+
+                logging.info(
+                    "OLD: %s",
+                    old_url
+                )
+
+                logging.info(
+                    "NEW: %s",
+                    new_url
+                )
+
+                return True, True
 
     logging.error(
-        "%s: no URL available.",
+        "%s entry was NOT found in playlist.",
         channel_name
     )
 
-    return None
+    return False, False
 
 
 # ============================================================
-# WRITE FINAL PLAYLIST
+# PATCH EXISTING BIG PLAYLIST
 #
-# Stream URLs may change.
-# Logo URLs remain permanent.
+# This DOES NOT generate a new playlist.
+#
+# It edits only:
+#
+#   Roya TV
+#   Roya News
+#   Al Mamlaka TV
+#
+# If fresh scan fails:
+#
+#   old URL stays untouched
 # ============================================================
 
-def write_playlist(
-    streams,
-    path="playlist.m3u"
+def update_existing_playlist(
+    fresh_streams,
+    path=PLAYLIST_PATH
 ):
 
-    ordered_channels = [
+    if not os.path.exists(path):
+
+        raise FileNotFoundError(
+            f"{path} does not exist."
+        )
+
+    # newline="" preserves original line endings
+    with open(
+        path,
+        "r",
+        encoding="utf-8",
+        newline=""
+    ) as file:
+
+        lines = file.readlines()
+
+    changed_count = 0
+
+    for channel_name in [
         "Roya TV",
         "Roya News",
         "Al Mamlaka TV"
-    ]
+    ]:
 
-    lines = [
-        "#EXTM3U",
-        ""
-    ]
-
-    for channel in ordered_channels:
-
-        url = streams.get(
-            channel
+        fresh_url = fresh_streams.get(
+            channel_name
         )
 
-        if not url:
+        if not fresh_url:
+
+            logging.warning(
+                "%s: fresh scan failed. "
+                "LEAVING EXISTING PLAYLIST URL UNTOUCHED.",
+                channel_name
+            )
+
             continue
 
-        logo = CHANNEL_LOGOS.get(
-            channel,
-            ""
+        found, changed = replace_channel_url(
+            lines,
+            channel_name,
+            fresh_url
         )
 
-        lines.extend([
-            (
-                f'#EXTINF:-1 '
-                f'tvg-name="{channel}" '
-                f'tvg-logo="{logo}",'
-                f'{channel}'
-            ),
-            url,
-            ""
-        ])
+        if not found:
 
-    with open(
-        path,
-        "w",
-        encoding="utf-8",
-        newline="\n"
-    ) as file:
+            logging.error(
+                "%s could not be patched.",
+                channel_name
+            )
 
-        file.write(
-            "\n".join(lines).rstrip()
-            + "\n"
+        if changed:
+            changed_count += 1
+
+    # Write the full playlist back only if
+    # at least one of the 3 URLs changed
+    if changed_count > 0:
+
+        with open(
+            path,
+            "w",
+            encoding="utf-8",
+            newline=""
+        ) as file:
+
+            file.writelines(lines)
+
+        logging.info(
+            "playlist.m3u saved."
         )
+
+        logging.info(
+            "%d dynamic channel URL(s) changed.",
+            changed_count
+        )
+
+    else:
+
+        logging.info(
+            "No playlist changes needed."
+        )
+
+    return changed_count
 
 
 # ============================================================
@@ -1106,90 +944,55 @@ def main():
     )
 
     logging.info(
-        "=============================================="
-    )
-
-    # Load previous working URLs first
-    old_streams = (
-        load_existing_playlist()
+        "STATIC CHANNELS WILL NOT BE MODIFIED"
     )
 
     logging.info(
-        "Previous URLs loaded: %d",
-        len(old_streams)
+        "=============================================="
     )
 
-    # ========================================================
-    # 1. ROYA TV
-    # ========================================================
+    # --------------------------------------------------------
+    # 1. Get fresh Roya TV token
+    # --------------------------------------------------------
 
     fresh_roya_tv = sniff_roya(
         ROYA_TV_PAGE,
         "Roya TV"
     )
 
-    # ========================================================
-    # 2. ROYA NEWS
-    # ========================================================
+    # --------------------------------------------------------
+    # 2. Get fresh Roya News token
+    # --------------------------------------------------------
 
     fresh_roya_news = sniff_roya(
         ROYA_NEWS_PAGE,
         "Roya News"
     )
 
-    # ========================================================
-    # 3. AL MAMLAKA
-    # ========================================================
+    # --------------------------------------------------------
+    # 3. Get fresh Al Mamlaka URL
+    # --------------------------------------------------------
 
-    fresh_mamlaka = (
-        sniff_almamlaka()
-    )
+    fresh_mamlaka = sniff_almamlaka()
 
-    # ========================================================
-    # CHOOSE FINAL STREAM URLS
-    # ========================================================
+    fresh_streams = {
 
-    final_streams = {
-
-        "Roya TV": choose_url(
-            "Roya TV",
+        "Roya TV":
             fresh_roya_tv,
-            old_streams
-        ),
 
-        "Roya News": choose_url(
-            "Roya News",
+        "Roya News":
             fresh_roya_news,
-            old_streams
-        ),
 
-        "Al Mamlaka TV": choose_url(
-            "Al Mamlaka TV",
-            fresh_mamlaka,
-            old_streams,
-            hard_fallback=
-                KNOWN_MAMLAKA_FALLBACK
-        )
+        "Al Mamlaka TV":
+            fresh_mamlaka
     }
 
-    # Remove empty values
-    final_streams = {
+    # --------------------------------------------------------
+    # Patch ONLY those three entries
+    # --------------------------------------------------------
 
-        channel: url
-
-        for channel, url
-        in final_streams.items()
-
-        if url
-
-    }
-
-    # ========================================================
-    # WRITE playlist.m3u
-    # ========================================================
-
-    write_playlist(
-        final_streams
+    update_existing_playlist(
+        fresh_streams
     )
 
     logging.info(
@@ -1197,19 +1000,12 @@ def main():
     )
 
     logging.info(
-        "playlist.m3u written with %d channel(s).",
-        len(final_streams)
+        "UPDATE COMPLETE"
     )
 
-    for channel, url in (
-        final_streams.items()
-    ):
-
-        logging.info(
-            "%s -> %s",
-            channel,
-            url
-        )
+    logging.info(
+        "All other playlist channels were preserved."
+    )
 
     logging.info(
         "=============================================="
