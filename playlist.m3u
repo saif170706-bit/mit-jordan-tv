@@ -1,19 +1,7 @@
 #EXTM3U
 
-#EXTINF:-1, Al Mamlaka TV
-https://brightcove.com
+#EXTINF:-1,Roya TV
+https://live.kwikmotion.com/royatvlive/royatv.smil/playlist.m3u8?hdnts=exp=1786905986~acl=/royatvlive/royatv.smil/*~hmac=29e275f4fb2d18eeb8736ff1d4d4f90613a18212bf1a5a4733faac33dfa14601
 
-#EXTINF:-1, Roya TV
-https://kwikmotion.com
-
-#EXTINF:-1, Roya News
-https://kwikmotion.com
-
-#EXTINF:-1, Roya Comedy
-https://kwikmotion.com
-
-#EXTINF:-1, Roya Kitchen
-https://kwikmotion.com
-
-#EXTINF:-1, Roya Set El Nakhat
-https://kwikmotion.com
+#EXTINF:-1,Roya News
+https://live.kwikmotion.com/royanewslive/royanews.smil/playlist.m3u8?hdnts=exp=1786905991~acl=/royanewslive/royanews.smil/*~hmac=4ca252b35913ba5d1d56d023ba8f890cc267e8a24e0beaf8ba0745d95dc32184
