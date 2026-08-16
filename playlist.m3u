@@ -1,10 +1,10 @@
 #EXTM3U
 
 #EXTINF:-1 tvg-name="Roya TV" tvg-logo="https://raw.githubusercontent.com/saif170706-bit/mit-jordan-tv/main/Roya-tv.webp",Roya TV
-https://live.kwikmotion.com/royatvlive/royatv.smil/playlist.m3u8?hdnts=exp=1786916964~acl=/royatvlive/royatv.smil/*~hmac=b0ab7f447602b6b0d8182d3aef30136ba3af0575c9f090c699c2845900d8d91d
+https://live.kwikmotion.com/royatvlive/royatv.smil/playlist.m3u8?hdnts=exp=1786917675~acl=/royatvlive/royatv.smil/*~hmac=4ad7549790bddc5284075e0190d4773608752283b61a9ce3ef8334f4d640c196
 
 #EXTINF:-1 tvg-name="Roya News" tvg-logo="https://raw.githubusercontent.com/saif170706-bit/mit-jordan-tv/main/Roya-news.webp",Roya News
-https://live.kwikmotion.com/royanewslive/royanews.smil/playlist.m3u8?hdnts=exp=1786916971~acl=/royanewslive/royanews.smil/*~hmac=bc9a07c75a252252941b1c1ea51a3464708207e302ca85ab829bae6f85a03455
+https://live.kwikmotion.com/royanewslive/royanews.smil/playlist.m3u8?hdnts=exp=1786917682~acl=/royanewslive/royanews.smil/*~hmac=a8b0f4e3d8082b93d9b573897ea695989a990f742bbd488eb6cfa6efe0314e47
 
 #EXTINF:-1 tvg-name="Al Mamlaka TV" tvg-logo="https://raw.githubusercontent.com/saif170706-bit/mit-jordan-tv/main/Almamlaka.png",Al Mamlaka TV
 https://fastly.live.brightcove.com/6376826200112/eu-central-1/6415809151001/eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJob3N0IjoieWlod3RhLmVncmVzcy5haGc3NmwiLCJhY2NvdW50X2lkIjoiNjQxNTgwOTE1MTAwMSIsImVobiI6ImZhc3RseS5saXZlLmJyaWdodGNvdmUuY29tIiwiaXNzIjoiYmxpdmUtcGxheWJhY2stc291cmNlLWFwaSIsInN1YiI6InBhdGhtYXB0b2tlbiIsImF1ZCI6WyI2NDE1ODA5MTUxMDAxIl0sImp0aSI6IjYzNzY4MjYyMDAxMTIifQ.EBaDAQiDkyoRKYIjLROyrZzKFPcftOUxk4ftmhtVsEk/playlist-hls-dvr.m3u8
