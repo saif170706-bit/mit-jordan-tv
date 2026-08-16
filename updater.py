@@ -15,23 +15,25 @@ def plet_network_sniffer(target_url):
     leder efter 'playlist.m3u8' i netværkstrafikken for at fange linket med tokenet.
     """
     options = Options()
-    options.add_argument("--headless")  # Gør browseren usynlig i skyen
+    options.add_argument("--headless=new")  # Ny headless-metode til cloud-miljøer
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
     options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36")
     
     # Aktiver logning af netværksydelse/trafik i Chrome
     options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
     
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    driver = None
     found_url = None
     
     try:
         logging.info(f"Åbner usynlig browser på live-siden: {target_url}")
+        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
         driver.get(target_url)
         
-        # Vent 8 sekunder på, at afspilleren indlæser og genererer tokenet i netværket
-        time.sleep(8)  
+        # Vent 10 sekunder på, at afspilleren indlæser og genererer tokenet i netværket
+        time.sleep(10)  
         
         # Hent alle netværksanmodninger, som browseren har foretaget
         logs = driver.get_log("performance")
@@ -51,30 +53,31 @@ def plet_network_sniffer(target_url):
     except Exception as e:
         logging.error(f"Fejl under søgning i netværksloggen: {e}")
     finally:
-        driver.quit()
+        if driver:
+            driver.quit()
         
     return found_url
 
 def main():
     logging.info("Starter det optimerede IPTV-scrapersystem...")
     
-    # --- 1. ANMODNING: AL MAMLAKA TV (Direkte til den rigtige live-side) ---
-    mamlaka_url = plet_network_sniffer("https://www.almamlakatv.com/live-video")
-    if not mamlaka_url:
-        logging.warning("Kunne ikke sniffe Al Mamlaka, bruger fallback link.")
-        mamlaka_url = "https://brightcove.com"
+    # --- 1. ANMODNING: AL MAMLAKA TV (Præcis den underside du har givet mig) ---
+    mamlaka_url = "https://brightcove.com"
+    mamlaka_sniffed = plet_network_sniffer("https://www.almamlakatv.com/live-video")
+    if mamlaka_sniffed:
+        mamlaka_url = mamlaka_sniffed
 
-    # --- 2. ANMODNING: ROYA TV (Direkte til den rigtige live-side) ---
-    roya_tv_url = plet_network_sniffer("https://roya.tv/live-stream/1")
-    if not roya_tv_url:
-        logging.warning("Kunne ikke sniffe Roya TV, bruger fallback link.")
-        roya_tv_url = "https://kwikmotion.com"
+    # --- 2. ANMODNING: ROYA TV (Præcis den underside du har givet mig) ---
+    roya_tv_url = "https://kwikmotion.com"
+    roya_tv_sniffed = plet_network_sniffer("https://roya.tv/live-stream/1")
+    if roya_tv_sniffed:
+        roya_tv_url = roya_tv_sniffed
 
-    # --- 3. ANMODNING: ROYA NEWS (Direkte til den rigtige live-side) ---
-    roya_news_url = plet_network_sniffer("https://roya.tv/live-stream/21")
-    if not roya_news_url:
-        logging.warning("Kunne ikke sniffe Roya News, bruger fallback link.")
-        roya_news_url = "https://kwikmotion.com"
+    # --- 3. ANMODNING: ROYA NEWS (Præcis den underside du har givet mig) ---
+    roya_news_url = "https://kwikmotion.com"
+    roya_news_sniffed = plet_network_sniffer("https://roya.tv/live-stream/21")
+    if roya_news_sniffed:
+        roya_news_url = roya_news_sniffed
 
     # --- BYG DEN ENDELIGE, RENE PLAYLISTE ---
     m3u_content = f"""#EXTM3U
@@ -100,7 +103,7 @@ https://kwikmotion.com
     
     with open("playlist.m3u", "w", encoding="utf-8") as f:
         f.write(m3u_content)
-    logging.info("Succes! playlist.m3u er gemt med de mest opdaterede token-links.")
+    logging.info("Succes! playlist.m3u er gemt korrekt.")
 
 if __name__ == "__main__":
     main()
