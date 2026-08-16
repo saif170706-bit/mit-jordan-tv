@@ -1,7 +1,10 @@
 #EXTM3U
 
 #EXTINF:-1,Roya TV
-https://live.kwikmotion.com/royatvlive/royatv.smil/playlist.m3u8?hdnts=exp=1786905986~acl=/royatvlive/royatv.smil/*~hmac=29e275f4fb2d18eeb8736ff1d4d4f90613a18212bf1a5a4733faac33dfa14601
+https://live.kwikmotion.com/royatvlive/royatv.smil/playlist.m3u8?hdnts=exp=1786907384~acl=/royatvlive/royatv.smil/*~hmac=ded67780d461eac300d44b9c20f33d83380fe702edd47bd2b6755095f33eaef0
 
 #EXTINF:-1,Roya News
-https://live.kwikmotion.com/royanewslive/royanews.smil/playlist.m3u8?hdnts=exp=1786905991~acl=/royanewslive/royanews.smil/*~hmac=4ca252b35913ba5d1d56d023ba8f890cc267e8a24e0beaf8ba0745d95dc32184
+https://live.kwikmotion.com/royanewslive/royanews.smil/playlist.m3u8?hdnts=exp=1786907392~acl=/royanewslive/royanews.smil/*~hmac=0d94718a4d413aa4899e01d105da93698acdbba1b7648c99412fe79140d6405c
+
+#EXTINF:-1,Al Mamlaka TV
+https://fastly.live.brightcove.com/6376826200112/eu-central-1/6415809151001/eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJob3N0IjoieWlod3RhLmVncmVzcy5haGc3NmwiLCJhY2NvdW50X2lkIjoiNjQxNTgwOTE1MTAwMSIsImVobiI6ImZhc3RseS5saXZlLmJyaWdodGNvdmUuY29tIiwiaXNzIjoiYmxpdmUtcGxheWJhY2stc291cmNlLWFwaSIsInN1YiI6InBhdGhtYXB0b2tlbiIsImF1ZCI6WyI2NDE1ODA5MTUxMDAxIl0sImp0aSI6IjYzNzY4MjYyMDAxMTIifQ.EBaDAQiDkyoRKYIjLROyrZzKFPcftOUxk4ftmhtVsEk/playlist-hls-dvr.m3u8
