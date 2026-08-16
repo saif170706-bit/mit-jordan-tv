@@ -2,28 +2,53 @@ name: Auto Update IPTV List
 
 on:
   schedule:
-    - cron: '0 * * * *'  # Kører automatisk EN GANG HVER TIME (Døgnet rundt)
-  workflow_dispatch:     # Gør at du også selv kan starte den manuelt med en knap
+    - cron: '0 * * * *'
+
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
+
   update-list:
-    runs-on: ubuntu-latest
+
+    runs-on: ubuntu-24.04
+
     steps:
-      - name: Hent kildekoden
+
+      - name: Hent repository
         uses: actions/checkout@v4
 
       - name: Sæt Python op
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
 
-      - name: Kør opdaterings-script
-        run: python updater.py
-
-      - name: Gem og push ændringer til mit arkiv
+      - name: Installer Selenium
         run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
+          python -m pip install --upgrade pip
+          pip install selenium
+
+      - name: Vis Chrome-versioner
+        run: |
+          google-chrome --version
+          chromedriver --version
+
+      - name: Kør IPTV stream scanner
+        run: |
+          python updater.py
+
+      - name: Gem ny playlist
+        run: |
+          git config user.name "GitHub Action"
+          git config user.email "action@github.com"
+
           git add playlist.m3u
-          git diff-index --quiet HEAD || git commit -m "Automatisk token opdatering"
-          git push
+
+          if git diff --cached --quiet; then
+            echo "Ingen ændringer i playlist.m3u"
+          else
+            git commit -m "Update IPTV stream URLs"
+            git push
+          fi
