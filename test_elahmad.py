@@ -10,6 +10,20 @@ from selenium.webdriver.common.by import By
 
 PAGE = "https://www.elahmad.ru/tv/live/roya_tv.php?id=RoyaTV"
 
+OUTPUT_FILE = "elahmad_debug.txt"
+
+
+def log(text=""):
+
+    print(text)
+
+    with open(
+        OUTPUT_FILE,
+        "a",
+        encoding="utf-8"
+    ) as f:
+        f.write(str(text) + "\n")
+
 
 def create_driver():
 
@@ -25,10 +39,15 @@ def create_driver():
 
     options.set_capability(
         "goog:loggingPrefs",
-        {"performance": "ALL"}
+        {
+            "performance": "ALL",
+            "browser": "ALL"
+        }
     )
 
-    chrome_binary = os.environ.get("CHROME_BINARY")
+    chrome_binary = os.environ.get(
+        "CHROME_BINARY"
+    )
 
     if chrome_binary:
         options.binary_location = chrome_binary
@@ -38,7 +57,9 @@ def create_driver():
     )
 
     if chromedriver_path:
-        service = Service(chromedriver_path)
+        service = Service(
+            chromedriver_path
+        )
     else:
         service = Service()
 
@@ -60,48 +81,9 @@ def create_driver():
     return driver
 
 
-def try_start_video(driver):
+def get_network_urls(logs):
 
-    try:
-        driver.execute_script("""
-            document.querySelectorAll('video').forEach(v => {
-                try {
-                    v.muted = true;
-                    v.autoplay = true;
-                    v.play().catch(() => {});
-                } catch(e) {}
-            });
-        """)
-    except Exception:
-        pass
-
-    for selector in [
-        ".vjs-big-play-button",
-        ".vjs-play-control",
-        "button"
-    ]:
-
-        try:
-            elements = driver.find_elements(
-                By.CSS_SELECTOR,
-                selector
-            )
-
-            for element in elements[:10]:
-
-                try:
-                    driver.execute_script(
-                        "arguments[0].click();",
-                        element
-                    )
-                except Exception:
-                    pass
-
-        except Exception:
-            pass
-
-
-def print_media_requests(logs):
+    urls = []
 
     for entry in logs:
 
@@ -114,7 +96,10 @@ def print_media_requests(logs):
         except Exception:
             continue
 
-        method = message.get("method", "")
+        method = message.get(
+            "method",
+            ""
+        )
 
         url = ""
 
@@ -136,45 +121,93 @@ def print_media_requests(logs):
                 .get("url", "")
             )
 
-        if not url:
-            continue
+        if url:
+            urls.append(url)
 
-        low = url.lower()
+    return urls
 
-        interesting = [
-            ".m3u8",
-            ".mpd",
-            "manifest",
-            "playlist",
-            "chunklist"
-        ]
 
-        if any(x in low for x in interesting):
+def try_start_video(driver):
 
-            print("")
-            print("================================")
-            print("MEDIA REQUEST FOUND")
-            print("================================")
-            print(url)
+    try:
+
+        driver.execute_script(
+            """
+            document.querySelectorAll('video').forEach(v => {
+
+                try {
+                    v.muted = true;
+
+                    const p = v.play();
+
+                    if (p && p.catch) {
+                        p.catch(() => {});
+                    }
+
+                } catch(e) {}
+
+            });
+            """
+        )
+
+    except Exception:
+        pass
 
 
 def main():
 
+    # Clear previous output
+    with open(
+        OUTPUT_FILE,
+        "w",
+        encoding="utf-8"
+    ) as f:
+        f.write("")
+
     driver = create_driver()
+
+    all_urls = set()
 
     try:
 
-        print("Opening:")
-        print(PAGE)
+        log("========================================")
+        log("OPENING PAGE")
+        log("========================================")
+        log(PAGE)
 
         driver.get(PAGE)
 
-        # Give page time to build player
-        time.sleep(8)
+        time.sleep(10)
 
-        try_start_video(driver)
+        log("")
+        log("========================================")
+        log("PAGE INFORMATION")
+        log("========================================")
 
-        # Also try iframes
+        log(
+            "CURRENT URL:"
+        )
+
+        log(
+            driver.current_url
+        )
+
+        log(
+            ""
+        )
+
+        log(
+            "PAGE TITLE:"
+        )
+
+        log(
+            driver.title
+        )
+
+        # ----------------------------------------------------
+        # iframe information
+        # ----------------------------------------------------
+
         try:
 
             iframes = driver.find_elements(
@@ -182,39 +215,76 @@ def main():
                 "iframe"
             )
 
-            print(
-                f"Found {len(iframes)} iframe(s)"
+            log("")
+            log(
+                f"IFRAMES FOUND: {len(iframes)}"
             )
 
-            for i in range(len(iframes)):
+            for i, iframe in enumerate(
+                iframes
+            ):
 
-                try:
+                src = (
+                    iframe.get_attribute("src")
+                    or ""
+                )
 
-                    driver.switch_to.default_content()
+                log(
+                    f"IFRAME {i + 1}: {src}"
+                )
 
-                    frames = driver.find_elements(
-                        By.TAG_NAME,
-                        "iframe"
-                    )
+        except Exception as e:
 
-                    if i >= len(frames):
-                        continue
+            log(
+                f"IFRAME ERROR: {e}"
+            )
 
-                    driver.switch_to.frame(
-                        frames[i]
-                    )
+        # ----------------------------------------------------
+        # Video elements
+        # ----------------------------------------------------
 
-                    try_start_video(driver)
+        try:
 
-                except Exception:
-                    pass
+            videos = driver.find_elements(
+                By.TAG_NAME,
+                "video"
+            )
 
-            driver.switch_to.default_content()
+            log("")
+            log(
+                f"VIDEO ELEMENTS FOUND: {len(videos)}"
+            )
 
-        except Exception:
-            pass
+            for i, video in enumerate(
+                videos
+            ):
 
-        # Watch traffic for 45 seconds
+                src = (
+                    video.get_attribute("src")
+                    or ""
+                )
+
+                log(
+                    f"VIDEO {i + 1}: {src}"
+                )
+
+        except Exception as e:
+
+            log(
+                f"VIDEO ERROR: {e}"
+            )
+
+        try_start_video(driver)
+
+        # ----------------------------------------------------
+        # Monitor network for 45 sec
+        # ----------------------------------------------------
+
+        log("")
+        log("========================================")
+        log("WATCHING NETWORK FOR 45 SECONDS")
+        log("========================================")
+
         for second in range(45):
 
             time.sleep(1)
@@ -223,13 +293,156 @@ def main():
                 "performance"
             )
 
-            print_media_requests(
+            urls = get_network_urls(
                 logs
             )
 
-            if second in [10, 20, 30]:
+            for url in urls:
 
-                try_start_video(driver)
+                if url in all_urls:
+                    continue
+
+                all_urls.add(url)
+
+                low = url.lower()
+
+                interesting = [
+                    ".m3u8",
+                    ".mpd",
+                    "roya",
+                    "stream",
+                    "player",
+                    "video",
+                    "manifest",
+                    "playlist",
+                    "hls"
+                ]
+
+                if any(
+                    word in low
+                    for word in interesting
+                ):
+
+                    log("")
+                    log("INTERESTING REQUEST:")
+                    log(url)
+
+            if second in [
+                10,
+                20,
+                30,
+                40
+            ]:
+
+                try_start_video(
+                    driver
+                )
+
+        # ----------------------------------------------------
+        # Javascript performance resources
+        # ----------------------------------------------------
+
+        log("")
+        log("========================================")
+        log("JAVASCRIPT PERFORMANCE RESOURCES")
+        log("========================================")
+
+        try:
+
+            resources = driver.execute_script(
+                """
+                return performance
+                    .getEntriesByType('resource')
+                    .map(x => x.name);
+                """
+            )
+
+            for url in resources:
+
+                low = url.lower()
+
+                interesting = [
+                    ".m3u8",
+                    ".mpd",
+                    "roya",
+                    "stream",
+                    "player",
+                    "video",
+                    "manifest",
+                    "playlist",
+                    "hls"
+                ]
+
+                if any(
+                    word in low
+                    for word in interesting
+                ):
+
+                    log(url)
+
+        except Exception as e:
+
+            log(
+                f"RESOURCE ERROR: {e}"
+            )
+
+        # ----------------------------------------------------
+        # Browser console
+        # ----------------------------------------------------
+
+        log("")
+        log("========================================")
+        log("BROWSER CONSOLE")
+        log("========================================")
+
+        try:
+
+            browser_logs = driver.get_log(
+                "browser"
+            )
+
+            for entry in browser_logs:
+
+                log(
+                    entry
+                )
+
+        except Exception as e:
+
+            log(
+                f"BROWSER LOG ERROR: {e}"
+            )
+
+        # ----------------------------------------------------
+        # Save page HTML
+        # ----------------------------------------------------
+
+        with open(
+            "elahmad_page.html",
+            "w",
+            encoding="utf-8"
+        ) as f:
+
+            f.write(
+                driver.page_source
+            )
+
+        log("")
+        log("========================================")
+        log("DONE")
+        log("========================================")
+
+        log(
+            f"TOTAL NETWORK URLS SEEN: {len(all_urls)}"
+        )
+
+        log(
+            "Saved elahmad_debug.txt"
+        )
+
+        log(
+            "Saved elahmad_page.html"
+        )
 
     finally:
 
