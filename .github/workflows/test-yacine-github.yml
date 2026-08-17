@@ -1,0 +1,393 @@
+name: Test Yacine URLs From GitHub
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install requests
+        run: |
+          python -m pip install requests
+
+      - name: Generate and print Yacine URLs
+        run: |
+          python - <<'PY'
+
+          import base64
+          import json
+          import requests
+          from urllib.parse import urlparse
+
+
+          BASE_URL = "http://def.yacinelive.com"
+          BASE_KEY = "c!xZj+N9&G@Ev@vw"
+
+
+          CHANNELS = {
+              1424: "Jordan Sport 1",
+              1425: "Jordan Sport 2",
+          }
+
+
+          def decode_response(response):
+
+              timestamp = (
+                  response.headers.get("T")
+                  or
+                  response.headers.get("t")
+              )
+
+              if not timestamp:
+                  raise RuntimeError(
+                      "Missing T response header"
+                  )
+
+              encoded = response.text.strip()
+
+              encrypted = base64.b64decode(
+                  encoded
+              )
+
+              key = (
+                  BASE_KEY
+                  +
+                  timestamp
+              ).encode("utf-8")
+
+              decrypted = bytes(
+                  value
+                  ^
+                  key[
+                      index
+                      %
+                      len(key)
+                  ]
+
+                  for index, value
+                  in enumerate(encrypted)
+              )
+
+              return json.loads(
+                  decrypted.decode("utf-8")
+              )
+
+
+          def get_channel(channel_id):
+
+              url = (
+                  f"{BASE_URL}"
+                  f"/api/channel/"
+                  f"{channel_id}"
+              )
+
+              response = requests.get(
+                  url,
+                  headers={
+                      "Accept":
+                          "application/json",
+
+                      "User-Agent":
+                          "okhttp/4.12.0",
+                  },
+                  timeout=30,
+              )
+
+              response.raise_for_status()
+
+              return decode_response(
+                  response
+              )
+
+
+          for channel_id, name in CHANNELS.items():
+
+              print("")
+              print("")
+              print(
+                  "=" * 70
+              )
+
+              print(
+                  name,
+                  "- CHANNEL ID",
+                  channel_id
+              )
+
+              print(
+                  "=" * 70
+              )
+
+
+              # ----------------------------------------------------
+              # GET FRESH TOKEN
+              # ----------------------------------------------------
+
+              payload = get_channel(
+                  channel_id
+              )
+
+
+              streams = payload.get(
+                  "data",
+                  []
+              )
+
+
+              stream = None
+
+
+              for candidate in streams:
+
+                  url = candidate.get(
+                      "url",
+                      ""
+                  )
+
+                  if (
+                      isinstance(url, str)
+                      and
+                      ".m3u8"
+                      in url.lower()
+                  ):
+                      stream = candidate
+                      break
+
+
+              if stream is None:
+                  raise RuntimeError(
+                      f"No M3U8 found for {channel_id}"
+                  )
+
+
+              original_url = (
+                  stream["url"].strip()
+              )
+
+
+              # ----------------------------------------------------
+              # USE EXACT HEADERS RETURNED BY API
+              # ----------------------------------------------------
+
+              headers = {}
+
+
+              supplied_headers = (
+                  stream.get("headers")
+                  or
+                  {}
+              )
+
+
+              if isinstance(
+                  supplied_headers,
+                  dict
+              ):
+                  headers.update(
+                      supplied_headers
+                  )
+
+
+              referer = stream.get(
+                  "referer"
+              )
+
+              if referer:
+                  headers.setdefault(
+                      "Referer",
+                      referer
+                  )
+
+
+              user_agent = stream.get(
+                  "user_agent"
+              )
+
+              if user_agent:
+                  headers.setdefault(
+                      "User-Agent",
+                      user_agent
+                  )
+
+
+              print("")
+              print(
+                  "HEADERS USED BY GITHUB:"
+              )
+
+              print(
+                  json.dumps(
+                      headers,
+                      indent=2
+                  )
+              )
+
+
+              # ----------------------------------------------------
+              # IMPORTANT:
+              # PRINT ORIGINAL TOKEN URL
+              # ----------------------------------------------------
+
+              print("")
+              print(
+                  "ORIGINAL_GITHUB_URL:"
+              )
+
+              print(
+                  original_url
+              )
+
+
+              # ----------------------------------------------------
+              # FOLLOW REDIRECTS INSIDE GITHUB
+              # ----------------------------------------------------
+
+              response = requests.get(
+                  original_url,
+                  headers=headers,
+                  allow_redirects=True,
+                  timeout=30,
+              )
+
+
+              print("")
+              print(
+                  "REDIRECT CHAIN:"
+              )
+
+
+              if response.history:
+
+                  for number, previous in enumerate(
+                      response.history,
+                      start=1
+                  ):
+
+                      print(
+                          f"{number}."
+                      )
+
+                      print(
+                          "STATUS:",
+                          previous.status_code
+                      )
+
+                      print(
+                          "URL:",
+                          previous.url
+                      )
+
+                      print(
+                          "LOCATION:",
+                          previous.headers.get(
+                              "Location"
+                          )
+                      )
+
+                      print("")
+
+              else:
+
+                  print(
+                      "No redirects."
+                  )
+
+
+              # ----------------------------------------------------
+              # PRINT FINAL URL ACTUALLY USED BY GITHUB
+              # ----------------------------------------------------
+
+              print("")
+              print(
+                  "FINAL_GITHUB_URL:"
+              )
+
+              print(
+                  response.url
+              )
+
+
+              print("")
+              print(
+                  "FINAL STATUS:"
+              )
+
+              print(
+                  response.status_code
+              )
+
+
+              print("")
+              print(
+                  "FINAL HOST:"
+              )
+
+              print(
+                  urlparse(
+                      response.url
+                  ).hostname
+              )
+
+
+              print("")
+              print(
+                  "CONTENT TYPE:"
+              )
+
+              print(
+                  response.headers.get(
+                      "Content-Type"
+                  )
+              )
+
+
+              # ----------------------------------------------------
+              # VERIFY HLS
+              # ----------------------------------------------------
+
+              body = response.text
+
+
+              print("")
+              print(
+                  "IS HLS:"
+              )
+
+              print(
+                  "#EXTM3U"
+                  in
+                  body[:8192]
+              )
+
+
+              print("")
+              print(
+                  "FIRST PLAYLIST LINES:"
+              )
+
+
+              for line in (
+                  body.splitlines()[:12]
+              ):
+
+                  print(line)
+
+
+              print("")
+              print(
+                  "=" * 70
+              )
+
+
+          PY
