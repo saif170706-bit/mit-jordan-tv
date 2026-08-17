@@ -1,4 +1,4 @@
-name: Test Day3a Force 720p
+name: Test Day3a Derived 720p URL
 
 on:
   workflow_dispatch:
@@ -9,13 +9,13 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 20
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Playwright Chromium and FFmpeg
+      - name: Install Playwright and FFmpeg
         run: |
           set -e
 
@@ -27,7 +27,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg
 
-      - name: Read first episode from CSV
+      - name: Read first episode
         id: source
         shell: bash
         run: |
@@ -38,14 +38,8 @@ jobs:
           import os
           import sys
 
-          filename = "day3a_sources.csv"
-
-          if not os.path.exists(filename):
-              print("ERROR: day3a_sources.csv not found")
-              sys.exit(1)
-
           with open(
-              filename,
+              "day3a_sources.csv",
               "r",
               encoding="utf-8-sig",
               newline=""
@@ -56,22 +50,14 @@ jobs:
               print("ERROR: CSV is empty")
               sys.exit(1)
 
-          row = rows[0]
-
-          season = (row.get("season") or "").strip()
-          episode = (row.get("episode") or "").strip()
-          url = (row.get("url") or "").strip()
+          url = (rows[0].get("url") or "").strip()
 
           if not url:
-              print("ERROR: No URL in first row")
+              print("ERROR: First episode has no URL")
               sys.exit(1)
 
-          print("======================================")
-          print("EPISODE")
-          print("======================================")
-          print("Season:", season)
-          print("Episode:", episode)
-          print("URL:", url)
+          print("Episode URL:")
+          print(url)
 
           with open(
               os.environ["GITHUB_OUTPUT"],
@@ -81,74 +67,41 @@ jobs:
               out.write(f"url={url}\n")
           PY
 
-      - name: Create 720p browser scanner
+      - name: Capture normal Dailymotion media URL
+        env:
+          VIDEO_URL: ${{ steps.source.outputs.url }}
         run: |
-          cat > force_720.py <<'PY'
+          cat > capture.py <<'PY'
 
           import os
-          import json
           import time
-          import subprocess
-
           from playwright.sync_api import sync_playwright
-
 
           VIDEO_URL = os.environ["VIDEO_URL"]
 
-          hls_urls = []
+          found = []
 
 
-          def add_hls(url, source):
-              if not url:
-                  return
+          def handle_request(request):
 
-              if ".m3u8" not in url.lower():
-                  return
+              url = request.url
 
-              item = {
-                  "url": url,
-                  "source": source,
-              }
-
-              if not any(
-                  x["url"] == url
-                  for x in hls_urls
-              ):
-                  hls_urls.append(item)
-
-                  print("")
-                  print("HLS FOUND:")
-                  print("Source:", source)
-                  print(url)
-
-
-          def request_handler(request):
-              add_hls(
-                  request.url,
-                  "request"
-              )
-
-
-          def response_handler(response):
-              try:
-                  content_type = (
-                      response.headers.get(
-                          "content-type",
-                          ""
-                      )
-                  )
-              except Exception:
-                  content_type = ""
+              lower = url.lower()
 
               if (
-                  ".m3u8" in response.url.lower()
-                  or
-                  "mpegurl" in content_type.lower()
+                  "dmcdn.net" in lower
+                  and
+                  "_mp4_h264_aac_6.m3u8" in lower
+                  and
+                  "_hd_" not in lower
               ):
-                  add_hls(
-                      response.url,
-                      "response"
-                  )
+
+                  if url not in found:
+                      found.append(url)
+
+                      print("")
+                      print("DIRECT LOW STREAM FOUND:")
+                      print(url)
 
 
           with sync_playwright() as p:
@@ -168,8 +121,6 @@ jobs:
                       "height": 1080,
                   },
 
-                  locale="da-DK",
-
                   user_agent=(
                       "Mozilla/5.0 "
                       "(Windows NT 10.0; Win64; x64) "
@@ -182,21 +133,10 @@ jobs:
 
               context.on(
                   "request",
-                  request_handler
-              )
-
-              context.on(
-                  "response",
-                  response_handler
+                  handle_request
               )
 
               page = context.new_page()
-
-              print("")
-              print("======================================")
-              print("OPENING DAILYMOTION")
-              print("======================================")
-              print(VIDEO_URL)
 
               page.goto(
                   VIDEO_URL,
@@ -204,715 +144,250 @@ jobs:
                   timeout=60000,
               )
 
-              page.wait_for_timeout(
-                  10000
-              )
-
-
-              # ====================================================
-              # ACCEPT COOKIE/CONSENT UI IF PRESENT
-              # ====================================================
-
-              consent_words = [
-                  "Accept all",
-                  "Accept All",
-                  "Accept",
-                  "Accepter alle",
-                  "Accepter",
-                  "Tillad alle",
-                  "Agree",
-                  "I agree",
-              ]
-
-              for word in consent_words:
-
-                  try:
-
-                      button = page.get_by_text(
-                          word,
-                          exact=False
-                      ).first
-
-                      if button.is_visible(
-                          timeout=1000
-                      ):
-
-                          print(
-                              "Clicking consent:",
-                              word
-                          )
-
-                          button.click(
-                              timeout=3000
-                          )
-
-                          page.wait_for_timeout(
-                              2000
-                          )
-
-                          break
-
-                  except Exception:
-                      pass
-
-
-              # ====================================================
-              # CHECK WHETHER DAILYMOTION WEB SDK IS AVAILABLE
-              # ====================================================
-
-              print("")
-              print("======================================")
-              print("CHECKING DAILYMOTION PLAYER SDK")
-              print("======================================")
-
-              sdk_info = page.evaluate(
-                  """
-                  () => {
-                      return {
-                          hasDailymotion:
-                              typeof window.dailymotion
-                              !== "undefined",
-
-                          hasGetPlayer:
-                              !!(
-                                  window.dailymotion
-                                  &&
-                                  window.dailymotion.getPlayer
-                              ),
-
-                          hasGetAllPlayers:
-                              !!(
-                                  window.dailymotion
-                                  &&
-                                  window.dailymotion.getAllPlayers
-                              )
-                      };
-                  }
-                  """
-              )
-
-              print(
-                  json.dumps(
-                      sdk_info,
-                      indent=2
-                  )
-              )
-
-
-              # ====================================================
-              # TRY PUBLIC DAILYMOTION PLAYER SDK
-              # ====================================================
-
-              sdk_result = page.evaluate(
-                  """
-                  async () => {
-
-                      const result = {
-                          method: "sdk",
-                          players: [],
-                          error: null
-                      };
-
-
-                      try {
-
-                          if (
-                              !window.dailymotion
-                              ||
-                              !window.dailymotion.getAllPlayers
-                          ) {
-                              result.error =
-                                  "Dailymotion SDK/player list unavailable";
-
-                              return result;
-                          }
-
-
-                          const promises =
-                              window.dailymotion.getAllPlayers();
-
-                          result.promiseCount =
-                              promises.length;
-
-
-                          const players =
-                              await Promise.all(
-                                  promises
-                              );
-
-
-                          for (
-                              let i = 0;
-                              i < players.length;
-                              i++
-                          ) {
-
-                              const player =
-                                  players[i];
-
-                              const data = {
-                                  index: i
-                              };
-
-
-                              try {
-
-                                  const stateBefore =
-                                      await player.getState();
-
-                                  data.stateBefore =
-                                      stateBefore;
-
-                              } catch (error) {
-
-                                  data.stateBeforeError =
-                                      String(error);
-                              }
-
-
-                              try {
-
-                                  await player.setQuality(
-                                      "720"
-                                  );
-
-                                  data.setQuality =
-                                      "720 requested";
-
-                              } catch (error) {
-
-                                  data.setQualityError =
-                                      String(error);
-                              }
-
-
-                              try {
-
-                                  await player.play();
-
-                                  data.play =
-                                      "requested";
-
-                              } catch (error) {
-
-                                  data.playError =
-                                      String(error);
-                              }
-
-
-                              await new Promise(
-                                  resolve =>
-                                      setTimeout(
-                                          resolve,
-                                          5000
-                                      )
-                              );
-
-
-                              try {
-
-                                  const stateAfter =
-                                      await player.getState();
-
-                                  data.stateAfter =
-                                      stateAfter;
-
-                              } catch (error) {
-
-                                  data.stateAfterError =
-                                      String(error);
-                              }
-
-
-                              result.players.push(
-                                  data
-                              );
-                          }
-
-
-                      } catch (error) {
-
-                          result.error =
-                              String(error);
-                      }
-
-
-                      return result;
-                  }
-                  """
-              )
-
-
-              print("")
-              print("======================================")
-              print("SDK FORCE-720 RESULT")
-              print("======================================")
-
-              print(
-                  json.dumps(
-                      sdk_result,
-                      indent=2,
-                      default=str
-                  )
-              )
-
-
-              # Give player time to request the new rendition.
-              page.wait_for_timeout(
-                  12000
-              )
-
-
-              # ====================================================
-              # UI FALLBACK
-              #
-              # If the public SDK isn't exposed on dailymotion.com,
-              # try opening player settings and clicking 720.
-              # ====================================================
-
-              print("")
-              print("======================================")
-              print("TRYING UI 720P FALLBACK")
-              print("======================================")
-
-
-              # First ensure video is playing/muted where possible.
-              for frame in page.frames:
-
-                  try:
-
-                      frame.evaluate(
-                          """
-                          () => {
-                              const videos =
-                                  document.querySelectorAll(
-                                      "video"
-                                  );
-
-                              for (
-                                  const video
-                                  of videos
-                              ) {
+              page.wait_for_timeout(10000)
+
+              try:
+
+                  page.evaluate(
+                      """
+                      () => {
+                          document
+                              .querySelectorAll('video')
+                              .forEach(video => {
                                   video.muted = true;
+                                  video.play().catch(() => {});
+                              });
+                      }
+                      """
+                  )
 
-                                  video.play()
-                                      .catch(
-                                          () => {}
-                                      );
-                              }
-                          }
-                          """
-                      )
+              except Exception:
+                  pass
 
-                  except Exception:
-                      pass
-
-
-              # Search for buttons that may open settings.
-              settings_terms = [
-                  "Settings",
-                  "Quality",
-                  "Player settings",
-                  "Video quality",
-                  "Indstillinger",
-                  "Kvalitet",
-              ]
-
-
-              for frame in page.frames:
-
-                  for term in settings_terms:
-
-                      try:
-
-                          locator = frame.get_by_text(
-                              term,
-                              exact=False
-                          ).first
-
-                          if locator.is_visible(
-                              timeout=800
-                          ):
-
-                              print(
-                                  "Found settings text:",
-                                  term
-                              )
-
-                              locator.click(
-                                  timeout=3000
-                              )
-
-                              page.wait_for_timeout(
-                                  1500
-                              )
-
-                      except Exception:
-                          pass
-
-
-              # Try 720 text after settings menu has opened.
-              clicked_720 = False
-
-
-              for frame in page.frames:
-
-                  for term in [
-                      "720p",
-                      "720",
-                      "HD 720",
-                  ]:
-
-                      try:
-
-                          locator = frame.get_by_text(
-                              term,
-                              exact=False
-                          ).first
-
-                          if locator.is_visible(
-                              timeout=1000
-                          ):
-
-                              print("")
-                              print(
-                                  "CLICKING QUALITY:",
-                                  term
-                              )
-
-                              locator.click(
-                                  timeout=5000
-                              )
-
-                              clicked_720 = True
-
-                              page.wait_for_timeout(
-                                  10000
-                              )
-
-                              break
-
-                      except Exception:
-                          pass
-
-
-                  if clicked_720:
-                      break
-
-
-              print(
-                  "UI 720 click success:",
-                  clicked_720
-              )
-
-
-              # Wait for new network traffic.
-              page.wait_for_timeout(
-                  12000
-              )
-
-
-              # Screenshot for debugging.
-              page.screenshot(
-                  path="day3a-force720.png",
-                  full_page=False
-              )
-
+              page.wait_for_timeout(15000)
 
               browser.close()
 
 
-          # ========================================================
-          # SAVE CAPTURED HLS URLS
-          # ========================================================
+          if not found:
 
-          print("")
-          print("======================================")
-          print("ALL CAPTURED HLS URLS")
-          print("======================================")
-
-
-          for number, item in enumerate(
-              hls_urls,
-              start=1
-          ):
-
-              print("")
-              print(
-                  number,
-                  item["source"]
-              )
-
-              print(
-                  item["url"]
+              raise SystemExit(
+                  "ERROR: Could not capture low Dailymotion HLS URL"
               )
 
 
           with open(
-              "captured-hls.json",
+              "low-url.txt",
               "w",
               encoding="utf-8"
           ) as f:
-
-              json.dump(
-                  hls_urls,
-                  f,
-                  indent=2
-              )
-
-
-          if not hls_urls:
-
-              raise SystemExit(
-                  "ERROR: No HLS URLs captured"
-              )
+              f.write(found[-1])
 
           PY
 
-      - name: Force player to 720p and capture network
-        env:
-          VIDEO_URL: ${{ steps.source.outputs.url }}
-        run: |
-          set -e
+          python capture.py
 
-          python force_720.py
-
-      - name: Probe all captured Dailymotion streams
+      - name: Construct HD URL
         run: |
           set -e
 
           python - <<'PY'
 
-          import json
-          import subprocess
-          import sys
-
-
           with open(
-              "captured-hls.json",
+              "low-url.txt",
               "r",
               encoding="utf-8"
           ) as f:
-              items = json.load(f)
+              low = f.read().strip()
 
 
-          HEADERS = (
-              "Origin: https://geo.dailymotion.com\r\n"
-              "Referer: https://geo.dailymotion.com/\r\n"
-              "User-Agent: Mozilla/5.0 "
-              "(Windows NT 10.0; Win64; x64) "
-              "AppleWebKit/537.36 "
-              "Chrome/151 Safari/537.36\r\n"
+          target = "_mp4_h264_aac_6.m3u8"
+
+          replacement = "_mp4_h264_aac_hd_6.m3u8"
+
+
+          if target not in low:
+
+              raise SystemExit(
+                  "ERROR: Expected low-quality filename not found"
+              )
+
+
+          hd = low.replace(
+              target,
+              replacement
           )
-
-
-          results = []
 
 
           print("")
           print("======================================")
-          print("PROBING CAPTURED STREAMS")
+          print("LOW URL")
           print("======================================")
+          print(low)
+
+          print("")
+          print("======================================")
+          print("DERIVED HD URL")
+          print("======================================")
+          print(hd)
 
 
-          for number, item in enumerate(
-              items,
-              start=1
+          with open(
+              "hd-url.txt",
+              "w",
+              encoding="utf-8"
+          ) as f:
+              f.write(hd)
+
+          PY
+
+      - name: Probe original low stream
+        run: |
+          set -e
+
+          URL=$(cat low-url.txt)
+
+          HEADERS=$'Origin: https://geo.dailymotion.com\r\nReferer: https://geo.dailymotion.com/\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36\r\n'
+
+          echo ""
+          echo "======================================"
+          echo "ORIGINAL STREAM"
+          echo "======================================"
+
+          ffprobe \
+            -headers "$HEADERS" \
+            -v error \
+            -show_entries \
+            stream=codec_type,codec_name,width,height \
+            -of default=noprint_wrappers=1 \
+            "$URL"
+
+      - name: Probe derived HD stream
+        id: hdtest
+        shell: bash
+        run: |
+          set +e
+
+          URL=$(cat hd-url.txt)
+
+          HEADERS=$'Origin: https://geo.dailymotion.com\r\nReferer: https://geo.dailymotion.com/\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36\r\n'
+
+          echo ""
+          echo "======================================"
+          echo "TESTING DERIVED HD STREAM"
+          echo "======================================"
+
+          ffprobe \
+            -headers "$HEADERS" \
+            -v error \
+            -show_entries \
+            stream=codec_type,codec_name,width,height \
+            -of default=noprint_wrappers=1 \
+            "$URL" \
+            > hd-probe.txt \
+            2> hd-error.txt
+
+          STATUS=$?
+
+          echo ""
+          echo "FFPROBE EXIT CODE:"
+          echo "$STATUS"
+
+          echo ""
+          echo "PROBE OUTPUT:"
+          cat hd-probe.txt
+
+          echo ""
+          echo "ERROR OUTPUT:"
+          cat hd-error.txt
+
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+
+          exit 0
+
+      - name: Evaluate HD result
+        run: |
+          python - <<'PY'
+
+          import os
+          import re
+          import sys
+
+
+          probe = ""
+
+          if os.path.exists(
+              "hd-probe.txt"
           ):
 
-              url = item["url"]
+              with open(
+                  "hd-probe.txt",
+                  "r",
+                  encoding="utf-8"
+              ) as f:
+                  probe = f.read()
 
 
-              # Ignore ad/VMAP .m3u8-looking URLs.
-              if (
-                  "dmxleo.dailymotion.com"
-                  in url
-              ):
-                  continue
-
-
-              print("")
-              print(
-                  "Testing:",
-                  number
-              )
-
-
-              command = [
-                  "ffprobe",
-                  "-headers",
-                  HEADERS,
-                  "-v",
-                  "error",
-                  "-show_entries",
-                  (
-                      "stream="
-                      "codec_type,"
-                      "codec_name,"
-                      "width,"
-                      "height"
-                  ),
-                  "-of",
-                  "json",
-                  url,
-              ]
-
-
-              try:
-
-                  process = subprocess.run(
-                      command,
-                      capture_output=True,
-                      text=True,
-                      timeout=35
-                  )
-
-              except subprocess.TimeoutExpired:
-
-                  print(
-                      "Probe timeout"
-                  )
-
-                  continue
-
-
-              if process.returncode != 0:
-
-                  print(
-                      "Probe failed"
-                  )
-
-                  continue
-
-
-              try:
-
-                  probe = json.loads(
-                      process.stdout
-                  )
-
-              except Exception:
-
-                  continue
-
-
-              heights = [
-                  int(stream["height"])
-                  for stream
-                  in probe.get(
-                      "streams",
-                      []
-                  )
-                  if (
-                      stream.get(
-                          "codec_type"
-                      )
-                      == "video"
-                      and
-                      stream.get(
-                          "height"
-                      )
-                  )
-              ]
-
-
-              if not heights:
-                  continue
-
-
-              height = max(
-                  heights
-              )
-
-
-              print(
-                  "REAL RESOLUTION:",
-                  f"{height}p"
-              )
-
-
-              results.append({
-                  "url": url,
-                  "height": height,
-                  "probe": probe,
-              })
-
-
-          if not results:
-
-              print(
-                  "ERROR: No usable video streams"
-              )
-
-              sys.exit(1)
-
-
-          results.sort(
-              key=lambda x:
-                  x["height"],
-              reverse=True
+          match = re.search(
+              r"height=(\d+)",
+              probe
           )
-
-
-          winner = results[0]
 
 
           print("")
           print("======================================")
-          print("BEST STREAM FOUND")
+          print("RESULT")
           print("======================================")
-          print(
-              "Resolution:",
-              f"{winner['height']}p"
-          )
 
 
-          if winner["height"] >= 720:
+          if not match:
+
+              print(
+                  "DERIVED HD URL DID NOT WORK."
+              )
 
               print("")
               print(
-                  "SUCCESS: AUTOMATIC 720P DISCOVERY WORKED"
+                  "This probably means the sec2 token "
+                  "is signed separately for each quality."
+              )
+
+              sys.exit(0)
+
+
+          height = int(
+              match.group(1)
+          )
+
+
+          print(
+              "Derived stream height:",
+              height
+          )
+
+
+          if height >= 720:
+
+              print("")
+              print(
+                  "SUCCESS: AUTOMATIC 720P URL DERIVATION WORKS"
               )
 
           else:
 
               print("")
               print(
-                  "NOT YET: highest stream is",
-                  f"{winner['height']}p"
-              )
-
-
-          with open(
-              "best-url.txt",
-              "w",
-              encoding="utf-8"
-          ) as f:
-
-              f.write(
-                  winner["url"]
-              )
-
-
-          with open(
-              "probe-results.json",
-              "w",
-              encoding="utf-8"
-          ) as f:
-
-              json.dump(
-                  results,
-                  f,
-                  indent=2
+                  "Derived URL responded, but it was not 720p."
               )
 
           PY
 
-      - name: Download 90 second best stream sample
+      - name: Download 90 second HD sample if available
+        if: steps.hdtest.outputs.status == '0'
         run: |
           set -e
 
-          URL=$(cat best-url.txt)
+          URL=$(cat hd-url.txt)
 
           HEADERS=$'Origin: https://geo.dailymotion.com\r\nReferer: https://geo.dailymotion.com/\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36\r\n'
 
@@ -924,9 +399,10 @@ jobs:
             -map 0:v:0 \
             -map 0:a:0? \
             -c copy \
-            day3a-force720-test.mp4
+            day3a-derived-hd.mp4
 
-      - name: Verify final sample
+      - name: Verify sample
+        if: steps.hdtest.outputs.status == '0'
         run: |
           echo ""
           echo "======================================"
@@ -936,20 +412,21 @@ jobs:
           ffprobe \
             -v error \
             -show_entries \
-            stream=index,codec_type,codec_name,width,height,r_frame_rate \
+            stream=codec_type,codec_name,width,height,r_frame_rate \
             -show_entries \
             format=duration,size,bit_rate \
             -of default=noprint_wrappers=1 \
-            day3a-force720-test.mp4
+            day3a-derived-hd.mp4
 
-      - name: Upload debugging files
+      - name: Upload diagnostics
         uses: actions/upload-artifact@v4
         with:
-          name: day3a-force720-test
+          name: day3a-derived-hd-test
           path: |
-            day3a-force720-test.mp4
-            captured-hls.json
-            probe-results.json
-            day3a-force720.png
+            low-url.txt
+            hd-url.txt
+            hd-probe.txt
+            hd-error.txt
+            day3a-derived-hd.mp4
           retention-days: 1
           if-no-files-found: warn
