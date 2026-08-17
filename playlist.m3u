@@ -1048,7 +1048,7 @@ https://streaming.zaytonatube.com:8081/AlMadinatv/almadina21/index.m3u8
 #EXTINF:-1 tvg-logo="https://i.imgur.com/7GaahYh.png" tvg-name="Al Maghribia (1080p)" group-title="General",Al Maghribia (1080p)
 http://185.9.2.18/chid_205/index.m3u8
 #EXTINF:-1 tvg-logo="https://raw.githubusercontent.com/saif170706-bit/qwerdfgjr/main/Almamlaka.png" tvg-name="Al Mamlaka TV" group-title="Uncategorized",Al Mamlaka TV
-https://fastly.live.brightcove.com/6376826200112/eu-central-1/6415809151001/eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJob3N0IjoieWlod3RhLmVncmVzcy5haGc3NmwiLCJhY2NvdW50X2lkIjoiNjQxNTgwOTE1MTAwMSIsImVobiI6ImZhc3RseS5saXZlLmJyaWdodGNvdmUuY29tIiwiaXNzIjoiYmxpdmUtcGxheWJhY2stc291cmNlLWFwaSIsInN1YiI6InBhdGhtYXB0b2tlbiIsImF1ZCI6WyI2NDE1ODA5MTUxMDAxIl0sImp0aSI6IjYzNzY4MjYyMDAxMTIifQ.EBaDAQiDkyoRKYIjLROyrZzKFPcftOUxk4ftmhtVsEk/playlist-hls-dvr.m3u8
+https://jordan-tv-router.saif170706.workers.dev/almamlaka.m3u8
 #EXTINF:-1 tvg-logo="https://i.imgur.com/sOQLV7L.png" tvg-name="Al Manar (576p) [Not 24/7]" group-title="News",Al Manar (576p) [Not 24/7]
 https://edge.fastpublish.me/live/index.m3u8
 #EXTINF:-1 tvg-logo="https://play-lh.googleusercontent.com/FHPrsr391mPFqKfTq6ZdvWPZNVfsZeTAVQ8rjQF-NosnRdNipUy5xa43RWkiF4tGcQU" tvg-name="Al Masar TV (576p)" group-title="News",Al Masar TV (576p)
@@ -19395,18 +19395,20 @@ https://rotv.romediavalencia.com:3839/live/rotvlive.m3u8
 https://viewmedia7219.bozztv.com/wmedia/viewmedia100/web_012/Stream/playlist.m3u8
 #EXTINF:-1 tvg-name="Rovr Pets (1080p) [Geo-blocked]" group-title="Undefined",Rovr Pets (1080p) [Geo-blocked]
 https://pb-vbv1er6nemjg9.akamaized.net/Rovr_Pets.m3u8
+#EXTINF:-1 tvg-name="Day3a Day3a S1" tvg-logo="https://cdn.phototourl.com/free/2026-08-17-b8ebdc26-9bef-4975-8c57-4385b533ee10.jpg" group-title="Syria",Day3a Day3a S1
+https://jordan-tv-router.saif170706.workers.dev/day3a-s1.m3u8
 #EXTINF:-1 tvg-logo="https://roya.tv/_next/image?url=https%3A%2F%2Fbackend.roya-tv.com%2Fimagechanger%2FSize01Q40R11%2Fimages%2Fchannels%2FGACtHgmN6t9X6RO.png&w=256&q=75" tvg-name="Roya Comedy" group-title="Jordan",Roya Comedy
 https://fast.kwikmotion.com/roya/comedy/playlist.m3u8
 #EXTINF:-1 tvg-logo="https://roya.tv/_next/image?url=https%3A%2F%2Fbackend.roya-tv.com%2Fimagechanger%2FSize01Q40R11%2Fimages%2Fchannels%2Fy2AB2KZz3UMXtyK.png&w=256&q=75" tvg-name="Roya Kitchen" group-title="Jordan",Roya Kitchen
 https://fast.kwikmotion.com/roya/kitchen/playlist.m3u8
 #EXTINF:-1 tvg-logo="https://raw.githubusercontent.com/saif170706-bit/qwerdfgjr/main/Roya-news.webp" tvg-name="Roya News" group-title="Jordan",Roya News
-https://live.kwikmotion.com/royanewslive/royanews.smil/playlist.m3u8?hdnts=exp=1786927523~acl=/royanewslive/royanews.smil/*~hmac=af7bb15a7ea9e5e36a6448261b48ea0925c6071ac3592eea1818b42b0ca8ef45
+https://jordan-tv-router.saif170706.workers.dev/roya-news.m3u8
 #EXTINF:-1 tvg-logo="https://roya.tv/_next/image?url=https%3A%2F%2Fbackend.roya-tv.com%2Fimagechanger%2FSize01Q40R11%2Fimages%2Fchannels%2Fi3HD9nf6Cv6CGz0.png&w=256&q=75" tvg-name="Roya Set El Nakhat" group-title="Jordan",Roya Set El Nakhat
 https://fast.kwikmotion.com/roya/set_el_nakhat/playlist.m3u8
 #EXTINF:-1 tvg-logo="https://static.telewebion.com/channelsLogo/0e3d7425-1a1b-47c4-b020-2e09a5fc2598/default" tvg-name="Roya TV" group-title="Undefined",Roya TV
 https://ncdn.telewebion.ir/iribu/live/playlist.m3u8
 #EXTINF:-1 tvg-logo="https://raw.githubusercontent.com/saif170706-bit/qwerdfgjr/main/Roya-tv.webp" tvg-name="Roya TV" group-title="Jordan",Roya TV
-https://live.kwikmotion.com/royatvlive/royatv.smil/playlist.m3u8?hdnts=exp=1786927517~acl=/royatvlive/royatv.smil/*~hmac=f2ab580ea231e500220b87f1f0f696725e691becfad087c211738cfc3b4f2ec4
+https://jordan-tv-router.saif170706.workers.dev/roya-tv.m3u8
 #EXTINF:-1 tvg-logo="https://images-3.rakuten.tv/storage/global-live-channel/translation/artwork/39438460-99ba-412e-ac19-9342249384af-width200-quality90.jpeg" tvg-name="Royalworld" group-title="Undefined",Royalworld
 https://ac76260b1102416c93f3d20958bfeb4b.mediatailor.us-east-1.amazonaws.com/v1/master/44f73ba4d03e9607dcd9bebdcb8494d86964f1d8/RakutenTV-pl_Royalworld/playlist.m3u8
 #EXTINF:-1 tvg-name="Royalworld Germany (720p)" group-title="Undefined",Royalworld Germany (720p)
