@@ -1,0 +1,1504 @@
+name: Ingest Day3a Season 1
+
+on:
+  workflow_dispatch:
+    inputs:
+      force_rebuild:
+        description: "Rebuild episodes already uploaded"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: day3a-season-1-ingest
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    env:
+      RELEASE_TAG: day3a-s1-media
+      SOURCE_FILE: day3a_s1_sources.csv
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+
+      # ============================================================
+      # 1. CHECKOUT
+      # ============================================================
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+
+      # ============================================================
+      # 2. INSTALL FFMPEG
+      # ============================================================
+
+      - name: Install FFmpeg
+        run: |
+          set -e
+
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+          echo ""
+          echo "======================================"
+          echo "FFMPEG"
+          echo "======================================"
+          ffmpeg -version | head -n 1
+
+          echo ""
+          echo "======================================"
+          echo "GITHUB CLI"
+          echo "======================================"
+          gh --version
+
+
+      # ============================================================
+      # 3. VALIDATE SOURCE CSV
+      # ============================================================
+
+      - name: Validate Season 1 source file
+        run: |
+          set -e
+
+          python - <<'PY'
+          import csv
+          import os
+          import sys
+
+          filename = "day3a_s1_sources.csv"
+
+          if not os.path.exists(filename):
+              print("")
+              print("ERROR:")
+              print("day3a_s1_sources.csv was not found")
+              print("in the repository root.")
+              print("")
+              sys.exit(1)
+
+          with open(
+              filename,
+              "r",
+              encoding="utf-8-sig",
+              newline=""
+          ) as f:
+              reader = csv.DictReader(f)
+              rows = list(reader)
+
+          required = {
+              "season",
+              "episode",
+              "m3u8_url",
+          }
+
+          fields = set(
+              reader.fieldnames or []
+          )
+
+          missing = required - fields
+
+          if missing:
+              print("")
+              print(
+                  "ERROR: Missing CSV columns:",
+                  ", ".join(sorted(missing))
+              )
+              print("")
+              sys.exit(1)
+
+          if not rows:
+              print("")
+              print("ERROR: CSV has no episode rows.")
+              print("")
+              sys.exit(1)
+
+          seen = set()
+
+          print("")
+          print("======================================")
+          print("SEASON 1 SOURCE LIST")
+          print("======================================")
+
+          for row in rows:
+
+              season = (
+                  row.get("season")
+                  or ""
+              ).strip()
+
+              episode = (
+                  row.get("episode")
+                  or ""
+              ).strip()
+
+              url = (
+                  row.get("m3u8_url")
+                  or ""
+              ).strip()
+
+              if season != "1":
+                  print(
+                      f"ERROR: episode {episode} "
+                      f"has season={season}"
+                  )
+                  sys.exit(1)
+
+              try:
+                  ep_number = int(episode)
+              except ValueError:
+                  print(
+                      f"ERROR: invalid episode: "
+                      f"{episode}"
+                  )
+                  sys.exit(1)
+
+              if ep_number < 1:
+                  print(
+                      f"ERROR: invalid episode: "
+                      f"{episode}"
+                  )
+                  sys.exit(1)
+
+              if ep_number in seen:
+                  print(
+                      f"ERROR: duplicate episode: "
+                      f"{ep_number}"
+                  )
+                  sys.exit(1)
+
+              seen.add(ep_number)
+
+              if not url.startswith(
+                  "https://"
+              ):
+                  print(
+                      f"ERROR: S1E{ep_number:02d} "
+                      "does not have an HTTPS URL"
+                  )
+                  sys.exit(1)
+
+              if ".m3u8" not in url.lower():
+                  print(
+                      f"ERROR: S1E{ep_number:02d} "
+                      "does not look like an M3U8 URL"
+                  )
+                  sys.exit(1)
+
+              print(
+                  f"S1E{ep_number:02d}  OK"
+              )
+
+          print("")
+          print(
+              "Episodes in CSV:",
+              len(rows)
+          )
+          print("")
+
+          PY
+
+
+      # ============================================================
+      # 4. CREATE SEASON 1 RELEASE IF NEEDED
+      # ============================================================
+
+      - name: Create Season 1 media release
+        run: |
+          set -e
+
+          echo ""
+          echo "======================================"
+          echo "CHECKING MEDIA RELEASE"
+          echo "======================================"
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1
+          then
+
+            echo ""
+            echo "Release already exists:"
+            echo "$RELEASE_TAG"
+
+          else
+
+            echo ""
+            echo "Creating release:"
+            echo "$RELEASE_TAG"
+
+            gh release create \
+              "$RELEASE_TAG" \
+              --title "Day3a Day3a - Season 1 Media" \
+              --notes "Permanent packaged media assets for Day3a Day3a Season 1." \
+              --latest=false
+
+          fi
+
+
+      # ============================================================
+      # 5. CREATE INGESTION SCRIPT
+      # ============================================================
+
+      - name: Create Season 1 ingestion script
+        run: |
+          cat > ingest_day3a.py <<'PY'
+
+          import csv
+          import json
+          import os
+          import re
+          import shutil
+          import subprocess
+          import sys
+          import tempfile
+          from pathlib import Path
+
+
+          SOURCE_FILE = os.environ.get(
+              "SOURCE_FILE",
+              "day3a_s1_sources.csv"
+          )
+
+          RELEASE_TAG = os.environ.get(
+              "RELEASE_TAG",
+              "day3a-s1-media"
+          )
+
+          FORCE = (
+              os.environ.get(
+                  "FORCE_REBUILD",
+                  "false"
+              ).lower()
+              == "true"
+          )
+
+
+          HEADERS = (
+              "Origin: https://geo.dailymotion.com\r\n"
+              "Referer: https://geo.dailymotion.com/\r\n"
+              "User-Agent: Mozilla/5.0 "
+              "(Windows NT 10.0; Win64; x64) "
+              "AppleWebKit/537.36 "
+              "(KHTML, like Gecko) "
+              "Chrome/151.0.0.0 "
+              "Safari/537.36\r\n"
+          )
+
+
+          failures = []
+          successes = []
+          skipped = []
+
+
+          # ========================================================
+          # COMMAND HELPER
+          # ========================================================
+
+          def run(
+              command,
+              *,
+              timeout=None,
+              capture=True,
+              check=True
+          ):
+
+              print("")
+              print(
+                  "$",
+                  " ".join(
+                      str(x)
+                      for x in command
+                  )
+              )
+
+              process = subprocess.run(
+                  command,
+                  text=True,
+                  capture_output=capture,
+                  timeout=timeout,
+              )
+
+              if capture:
+
+                  if process.stdout:
+                      print(
+                          process.stdout
+                      )
+
+                  if process.stderr:
+                      print(
+                          process.stderr
+                      )
+
+              if (
+                  check
+                  and
+                  process.returncode != 0
+              ):
+
+                  raise RuntimeError(
+                      "Command failed with "
+                      f"exit code "
+                      f"{process.returncode}"
+                  )
+
+              return process
+
+
+          # ========================================================
+          # EXISTING RELEASE ASSETS
+          # ========================================================
+
+          def get_asset_names():
+
+              result = run(
+                  [
+                      "gh",
+                      "release",
+                      "view",
+                      RELEASE_TAG,
+                      "--json",
+                      "assets",
+                      "--jq",
+                      ".assets[].name",
+                  ]
+              )
+
+              return {
+                  line.strip()
+                  for line
+                  in result.stdout.splitlines()
+                  if line.strip()
+              }
+
+
+          # ========================================================
+          # PROBE SOURCE M3U8
+          # ========================================================
+
+          def probe_source(url):
+
+              process = run(
+                  [
+                      "ffprobe",
+                      "-headers",
+                      HEADERS,
+                      "-v",
+                      "error",
+                      "-show_entries",
+                      (
+                          "stream="
+                          "codec_type,"
+                          "codec_name,"
+                          "width,"
+                          "height,"
+                          "r_frame_rate"
+                      ),
+                      "-show_entries",
+                      (
+                          "format="
+                          "duration,"
+                          "bit_rate"
+                      ),
+                      "-of",
+                      "json",
+                      url,
+                  ],
+                  timeout=60,
+              )
+
+              return json.loads(
+                  process.stdout
+              )
+
+
+          # ========================================================
+          # ANALYSE PROBE
+          # ========================================================
+
+          def analyse_probe(probe):
+
+              videos = [
+                  stream
+                  for stream
+                  in probe.get(
+                      "streams",
+                      []
+                  )
+                  if (
+                      stream.get(
+                          "codec_type"
+                      )
+                      == "video"
+                  )
+              ]
+
+              if not videos:
+
+                  raise RuntimeError(
+                      "No video stream found"
+                  )
+
+
+              best = max(
+                  videos,
+                  key=lambda x: int(
+                      x.get("height")
+                      or 0
+                  )
+              )
+
+
+              width = int(
+                  best.get("width")
+                  or 0
+              )
+
+              height = int(
+                  best.get("height")
+                  or 0
+              )
+
+
+              fps = (
+                  best.get(
+                      "r_frame_rate"
+                  )
+                  or ""
+              )
+
+
+              duration_text = (
+                  probe
+                  .get(
+                      "format",
+                      {}
+                  )
+                  .get(
+                      "duration"
+                  )
+              )
+
+
+              duration = (
+                  float(duration_text)
+                  if duration_text
+                  else 0.0
+              )
+
+
+              return {
+                  "width": width,
+                  "height": height,
+                  "fps": fps,
+                  "duration": duration,
+                  "video_codec":
+                      best.get(
+                          "codec_name"
+                      ),
+              }
+
+
+          # ========================================================
+          # PARSE SINGLE-FILE HLS PLAYLIST
+          # ========================================================
+
+          def parse_hls_playlist(
+              playlist_path
+          ):
+
+              lines = [
+                  line.strip()
+                  for line
+                  in Path(
+                      playlist_path
+                  )
+                  .read_text(
+                      encoding="utf-8"
+                  )
+                  .splitlines()
+              ]
+
+
+              if (
+                  "#EXT-X-ENDLIST"
+                  not in lines
+              ):
+
+                  raise RuntimeError(
+                      "Generated playlist "
+                      "does not contain "
+                      "#EXT-X-ENDLIST"
+                  )
+
+
+              if not any(
+                  line.startswith(
+                      "#EXT-X-BYTERANGE:"
+                  )
+                  for line in lines
+              ):
+
+                  raise RuntimeError(
+                      "Generated playlist "
+                      "does not contain "
+                      "byte ranges"
+                  )
+
+
+              segments = []
+
+              pending_duration = None
+              pending_range = None
+
+              previous_end = 0
+
+
+              for line in lines:
+
+                  if line.startswith(
+                      "#EXTINF:"
+                  ):
+
+                      value = (
+                          line
+                          .split(
+                              ":",
+                              1
+                          )[1]
+                          .split(
+                              ",",
+                              1
+                          )[0]
+                      )
+
+                      pending_duration = float(
+                          value
+                      )
+
+
+                  elif line.startswith(
+                      "#EXT-X-BYTERANGE:"
+                  ):
+
+                      value = line.split(
+                          ":",
+                          1
+                      )[1]
+
+
+                      if "@" in value:
+
+                          length_text, offset_text = (
+                              value.split(
+                                  "@",
+                                  1
+                              )
+                          )
+
+                          length = int(
+                              length_text
+                          )
+
+                          offset = int(
+                              offset_text
+                          )
+
+                      else:
+
+                          length = int(
+                              value
+                          )
+
+                          offset = (
+                              previous_end
+                          )
+
+
+                      pending_range = {
+                          "length": length,
+                          "offset": offset,
+                      }
+
+
+                  elif (
+                      line
+                      and
+                      not line.startswith("#")
+                  ):
+
+                      if (
+                          pending_duration
+                          is not None
+                          and
+                          pending_range
+                          is not None
+                      ):
+
+                          segment = {
+                              "duration":
+                                  pending_duration,
+
+                              "length":
+                                  pending_range[
+                                      "length"
+                                  ],
+
+                              "offset":
+                                  pending_range[
+                                      "offset"
+                                  ],
+
+                              "uri":
+                                  line,
+                          }
+
+                          segments.append(
+                              segment
+                          )
+
+                          previous_end = (
+                              segment["offset"]
+                              +
+                              segment["length"]
+                          )
+
+                          pending_duration = None
+                          pending_range = None
+
+
+              if not segments:
+
+                  raise RuntimeError(
+                      "No HLS segments parsed"
+                  )
+
+
+              total_duration = sum(
+                  item["duration"]
+                  for item
+                  in segments
+              )
+
+
+              return {
+                  "segments": segments,
+                  "duration":
+                      total_duration,
+              }
+
+
+          # ========================================================
+          # READ CSV
+          # ========================================================
+
+          with open(
+              SOURCE_FILE,
+              "r",
+              encoding="utf-8-sig",
+              newline=""
+          ) as f:
+
+              rows = list(
+                  csv.DictReader(f)
+              )
+
+
+          rows.sort(
+              key=lambda row:
+                  int(
+                      row["episode"]
+                  )
+          )
+
+
+          assets = get_asset_names()
+
+
+          print("")
+          print("======================================")
+          print("STARTING SEASON 1 INGEST")
+          print("======================================")
+          print(
+              "Episodes:",
+              len(rows)
+          )
+          print(
+              "Force rebuild:",
+              FORCE
+          )
+
+
+          # ========================================================
+          # PROCESS EPISODES
+          # ========================================================
+
+          for row in rows:
+
+              episode = int(
+                  row["episode"]
+              )
+
+              url = (
+                  row["m3u8_url"]
+                  .strip()
+              )
+
+              name = (
+                  f"S1E{episode:02d}"
+              )
+
+
+              ts_name = (
+                  f"{name}.ts"
+              )
+
+              playlist_name = (
+                  f"{name}.m3u8"
+              )
+
+              json_name = (
+                  f"{name}.json"
+              )
+
+
+              required_assets = {
+                  ts_name,
+                  playlist_name,
+                  json_name,
+              }
+
+
+              print("")
+              print("")
+              print(
+                  "======================================"
+              )
+              print(
+                  f"PROCESSING {name}"
+              )
+              print(
+                  "======================================"
+              )
+
+
+              if (
+                  not FORCE
+                  and
+                  required_assets
+                  .issubset(
+                      assets
+                  )
+              ):
+
+                  print(
+                      f"{name} already exists."
+                  )
+
+                  print(
+                      "Skipping."
+                  )
+
+                  skipped.append(
+                      name
+                  )
+
+                  continue
+
+
+              workdir = Path(
+                  tempfile.mkdtemp(
+                      prefix=(
+                          f"{name}-"
+                      )
+                  )
+              )
+
+
+              try:
+
+                  # -----------------------------------------------
+                  # VERIFY SOURCE QUALITY
+                  # -----------------------------------------------
+
+                  print("")
+                  print(
+                      "Verifying source..."
+                  )
+
+
+                  probe = probe_source(
+                      url
+                  )
+
+
+                  info = analyse_probe(
+                      probe
+                  )
+
+
+                  print("")
+                  print(
+                      "SOURCE QUALITY:"
+                  )
+                  print(
+                      "Width:",
+                      info["width"]
+                  )
+                  print(
+                      "Height:",
+                      info["height"]
+                  )
+                  print(
+                      "FPS:",
+                      info["fps"]
+                  )
+                  print(
+                      "Duration:",
+                      info["duration"]
+                  )
+
+
+                  if (
+                      info["height"]
+                      < 720
+                  ):
+
+                      raise RuntimeError(
+                          "SOURCE REJECTED: "
+                          f"only "
+                          f"{info['width']}x"
+                          f"{info['height']}"
+                      )
+
+
+                  print("")
+                  print(
+                      "720P CHECK: PASSED"
+                  )
+
+
+                  # -----------------------------------------------
+                  # PACKAGE INTO SINGLE-FILE HLS
+                  # -----------------------------------------------
+
+                  ts_path = (
+                      workdir
+                      /
+                      ts_name
+                  )
+
+                  playlist_path = (
+                      workdir
+                      /
+                      playlist_name
+                  )
+
+                  json_path = (
+                      workdir
+                      /
+                      json_name
+                  )
+
+
+                  print("")
+                  print(
+                      "Packaging episode "
+                      "as single-file HLS..."
+                  )
+
+
+                  run(
+                      [
+                          "ffmpeg",
+                          "-y",
+
+                          "-headers",
+                          HEADERS,
+
+                          "-i",
+                          url,
+
+                          "-map",
+                          "0:v:0",
+
+                          "-map",
+                          "0:a:0?",
+
+                          "-c",
+                          "copy",
+
+                          "-f",
+                          "hls",
+
+                          "-hls_time",
+                          "6",
+
+                          "-hls_list_size",
+                          "0",
+
+                          "-hls_playlist_type",
+                          "vod",
+
+                          "-hls_flags",
+                          "single_file",
+
+                          "-hls_segment_filename",
+                          str(
+                              ts_path
+                          ),
+
+                          str(
+                              playlist_path
+                          ),
+                      ],
+                      timeout=1800,
+                      capture=False,
+                  )
+
+
+                  # -----------------------------------------------
+                  # CHECK OUTPUT FILES
+                  # -----------------------------------------------
+
+                  if not ts_path.exists():
+
+                      raise RuntimeError(
+                          "TS file was not created"
+                      )
+
+
+                  if not playlist_path.exists():
+
+                      raise RuntimeError(
+                          "M3U8 file was not created"
+                      )
+
+
+                  ts_size = (
+                      ts_path
+                      .stat()
+                      .st_size
+                  )
+
+
+                  if ts_size <= 0:
+
+                      raise RuntimeError(
+                          "Generated TS is empty"
+                      )
+
+
+                  if ts_size >= (
+                      2 * 1024 ** 3
+                  ):
+
+                      raise RuntimeError(
+                          "Generated TS is "
+                          "2 GiB or larger"
+                      )
+
+
+                  # -----------------------------------------------
+                  # PARSE BYTE RANGE METADATA
+                  # -----------------------------------------------
+
+                  hls_info = (
+                      parse_hls_playlist(
+                          playlist_path
+                      )
+                  )
+
+
+                  metadata = {
+                      "season": 1,
+                      "episode": episode,
+                      "name": name,
+
+                      "width":
+                          info["width"],
+
+                      "height":
+                          info["height"],
+
+                      "fps":
+                          info["fps"],
+
+                      "video_codec":
+                          info[
+                              "video_codec"
+                          ],
+
+                      "source_duration":
+                          info["duration"],
+
+                      "packaged_duration":
+                          hls_info[
+                              "duration"
+                          ],
+
+                      "segment_count":
+                          len(
+                              hls_info[
+                                  "segments"
+                              ]
+                          ),
+
+                      "ts_size_bytes":
+                          ts_size,
+
+                      "ts_asset":
+                          ts_name,
+
+                      "playlist_asset":
+                          playlist_name,
+
+                      "metadata_asset":
+                          json_name,
+
+                      "segments":
+                          hls_info[
+                              "segments"
+                          ],
+                  }
+
+
+                  json_path.write_text(
+                      json.dumps(
+                          metadata,
+                          indent=2,
+                          ensure_ascii=False
+                      ),
+                      encoding="utf-8"
+                  )
+
+
+                  print("")
+                  print(
+                      "PACKAGED:"
+                  )
+                  print(
+                      "Segments:",
+                      metadata[
+                          "segment_count"
+                      ]
+                  )
+                  print(
+                      "Duration:",
+                      metadata[
+                          "packaged_duration"
+                      ]
+                  )
+                  print(
+                      "TS size:",
+                      ts_size
+                  )
+
+
+                  # -----------------------------------------------
+                  # UPLOAD RELEASE ASSETS
+                  # -----------------------------------------------
+
+                  print("")
+                  print(
+                      "Uploading to "
+                      "GitHub Release..."
+                  )
+
+
+                  upload_command = [
+                      "gh",
+                      "release",
+                      "upload",
+                      RELEASE_TAG,
+
+                      str(
+                          ts_path
+                      ),
+
+                      str(
+                          playlist_path
+                      ),
+
+                      str(
+                          json_path
+                      ),
+                  ]
+
+
+                  # If this is a rebuild, or only part of a previous
+                  # upload exists, replace all three files together.
+                  if (
+                      FORCE
+                      or
+                      bool(
+                          required_assets
+                          &
+                          assets
+                      )
+                  ):
+
+                      upload_command.append(
+                          "--clobber"
+                      )
+
+
+                  run(
+                      upload_command,
+                      timeout=1800,
+                  )
+
+
+                  assets.update(
+                      required_assets
+                  )
+
+
+                  successes.append(
+                      name
+                  )
+
+
+                  print("")
+                  print(
+                      f"SUCCESS: {name}"
+                  )
+
+
+              except Exception as exc:
+
+                  print("")
+                  print(
+                      "!!!!!!!!!!!!!!!!!!!!!!!!"
+                  )
+                  print(
+                      f"FAILED: {name}"
+                  )
+                  print(
+                      "!!!!!!!!!!!!!!!!!!!!!!!!"
+                  )
+                  print(
+                      str(exc)
+                  )
+
+
+                  failures.append({
+                      "episode":
+                          name,
+
+                      "error":
+                          str(exc),
+                  })
+
+
+              finally:
+
+                  shutil.rmtree(
+                      workdir,
+                      ignore_errors=True
+                  )
+
+
+          # ========================================================
+          # SUMMARY
+          # ========================================================
+
+          print("")
+          print("")
+          print(
+              "======================================"
+          )
+          print(
+              "SEASON 1 INGEST SUMMARY"
+          )
+          print(
+              "======================================"
+          )
+
+          print(
+              "Uploaded:",
+              len(successes)
+          )
+
+          print(
+              "Skipped:",
+              len(skipped)
+          )
+
+          print(
+              "Failed:",
+              len(failures)
+          )
+
+
+          if successes:
+
+              print("")
+              print(
+                  "UPLOADED:"
+              )
+
+              for item in successes:
+                  print(
+                      " -",
+                      item
+                  )
+
+
+          if skipped:
+
+              print("")
+              print(
+                  "ALREADY COMPLETE:"
+              )
+
+              for item in skipped:
+                  print(
+                      " -",
+                      item
+                  )
+
+
+          if failures:
+
+              print("")
+              print(
+                  "FAILED EPISODES:"
+              )
+
+              for item in failures:
+
+                  print(
+                      " -",
+                      item["episode"],
+                      ":",
+                      item["error"]
+                  )
+
+
+          Path(
+              "ingest-summary.json"
+          ).write_text(
+              json.dumps(
+                  {
+                      "successes":
+                          successes,
+
+                      "skipped":
+                          skipped,
+
+                      "failures":
+                          failures,
+                  },
+                  indent=2
+              ),
+              encoding="utf-8"
+          )
+
+
+          # Fail only AFTER trying all episodes.
+          if failures:
+
+              sys.exit(1)
+
+          PY
+
+
+      # ============================================================
+      # 6. RUN INGESTION
+      # ============================================================
+
+      - name: Ingest Season 1 episodes
+        env:
+          FORCE_REBUILD: ${{ inputs.force_rebuild }}
+        run: |
+          set -e
+
+          python ingest_day3a.py
+
+
+      # ============================================================
+      # 7. BUILD COMPLETE SEASON INDEX
+      # ============================================================
+
+      - name: Build Season 1 index
+        if: always()
+        run: |
+          set -e
+
+          rm -rf season1-metadata
+          mkdir -p season1-metadata
+
+          gh release download \
+            "$RELEASE_TAG" \
+            --pattern 'S1E*.json' \
+            --dir season1-metadata \
+            --clobber || true
+
+          python - <<'PY'
+
+          import json
+          from pathlib import Path
+
+
+          files = sorted(
+              Path(
+                  "season1-metadata"
+              ).glob(
+                  "S1E*.json"
+              )
+          )
+
+
+          episodes = []
+
+
+          for file in files:
+
+              with open(
+                  file,
+                  "r",
+                  encoding="utf-8"
+              ) as f:
+
+                  data = json.load(f)
+
+
+              # The season index does not need
+              # to duplicate all segment ranges.
+              episodes.append({
+                  "season":
+                      data["season"],
+
+                  "episode":
+                      data["episode"],
+
+                  "name":
+                      data["name"],
+
+                  "width":
+                      data["width"],
+
+                  "height":
+                      data["height"],
+
+                  "duration":
+                      data[
+                          "packaged_duration"
+                      ],
+
+                  "segment_count":
+                      data[
+                          "segment_count"
+                      ],
+
+                  "ts_asset":
+                      data[
+                          "ts_asset"
+                      ],
+
+                  "playlist_asset":
+                      data[
+                          "playlist_asset"
+                      ],
+
+                  "metadata_asset":
+                      data[
+                          "metadata_asset"
+                      ],
+              })
+
+
+          episodes.sort(
+              key=lambda x:
+                  x["episode"]
+          )
+
+
+          total_duration = sum(
+              episode["duration"]
+              for episode
+              in episodes
+          )
+
+
+          index = {
+              "season": 1,
+
+              "episode_count":
+                  len(episodes),
+
+              "total_duration":
+                  total_duration,
+
+              "release_tag":
+                  "day3a-s1-media",
+
+              "episodes":
+                  episodes,
+          }
+
+
+          with open(
+              "season1-index.json",
+              "w",
+              encoding="utf-8"
+          ) as f:
+
+              json.dump(
+                  index,
+                  f,
+                  indent=2,
+                  ensure_ascii=False
+              )
+
+
+          print("")
+          print(
+              "======================================"
+          )
+          print(
+              "SEASON INDEX"
+          )
+          print(
+              "======================================"
+          )
+          print(
+              "Episodes:",
+              len(episodes)
+          )
+          print(
+              "Total duration:",
+              total_duration
+          )
+
+          PY
+
+          gh release upload \
+            "$RELEASE_TAG" \
+            season1-index.json \
+            --clobber
+
+
+      # ============================================================
+      # 8. UPLOAD SMALL DIAGNOSTIC SUMMARY
+      # ============================================================
+
+      - name: Upload ingestion summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: day3a-season1-ingest-summary
+
+          path: |
+            ingest-summary.json
+            season1-index.json
+
+          retention-days: 7
+
+          if-no-files-found: warn
