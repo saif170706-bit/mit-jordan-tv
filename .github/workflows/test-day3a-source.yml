@@ -1,4 +1,4 @@
-name: Test Day3a 720p Discovery
+name: Test Day3a Streamlink 720p
 
 on:
   workflow_dispatch:
@@ -12,63 +12,38 @@ jobs:
     timeout-minutes: 25
 
     steps:
-      # ============================================================
-      # 1. CHECKOUT REPOSITORY
-      # ============================================================
-
       - name: Checkout repository
         uses: actions/checkout@v4
 
-
-      # ============================================================
-      # 2. INSTALL YT-DLP + BROWSER IMPERSONATION + FFMPEG
-      # ============================================================
-
-      - name: Install yt-dlp with browser impersonation and FFmpeg
+      - name: Install Streamlink and FFmpeg
         run: |
           set -e
 
           python -m pip install --upgrade pip
-
-          python -m pip install -U "yt-dlp[default,curl-cffi]"
+          python -m pip install -U streamlink
 
           sudo apt-get update
           sudo apt-get install -y ffmpeg
 
           echo ""
           echo "======================================"
-          echo "YT-DLP VERSION"
+          echo "STREAMLINK VERSION"
           echo "======================================"
-
-          yt-dlp --version
-
-          echo ""
-          echo "======================================"
-          echo "AVAILABLE IMPERSONATION TARGETS"
-          echo "======================================"
-
-          yt-dlp --list-impersonate-targets
+          streamlink --version
 
           echo ""
           echo "======================================"
           echo "FFMPEG VERSION"
           echo "======================================"
-
           ffmpeg -version | head -n 1
 
-
-      # ============================================================
-      # 3. READ FIRST EPISODE FROM CSV
-      # ============================================================
-
-      - name: Read first episode from day3a_sources.csv
+      - name: Read first episode from CSV
         id: source
         shell: bash
         run: |
           set -euo pipefail
 
           python - <<'PY'
-
           import csv
           import os
           import sys
@@ -76,10 +51,7 @@ jobs:
           filename = "day3a_sources.csv"
 
           if not os.path.exists(filename):
-              print("")
-              print("ERROR:")
-              print("day3a_sources.csv was not found in repository root.")
-              print("")
+              print("ERROR: day3a_sources.csv not found")
               sys.exit(1)
 
           with open(
@@ -88,46 +60,30 @@ jobs:
               encoding="utf-8-sig",
               newline=""
           ) as f:
-
               reader = csv.DictReader(f)
               rows = list(reader)
 
           if not rows:
-              print("")
-              print("ERROR:")
-              print("day3a_sources.csv contains no episode rows.")
-              print("")
+              print("ERROR: CSV contains no episodes")
               sys.exit(1)
 
           row = rows[0]
 
-          season = (
-              row.get("season") or ""
-          ).strip()
-
-          episode = (
-              row.get("episode") or ""
-          ).strip()
-
-          url = (
-              row.get("url") or ""
-          ).strip()
+          season = (row.get("season") or "").strip()
+          episode = (row.get("episode") or "").strip()
+          url = (row.get("url") or "").strip()
 
           if not url:
-              print("")
-              print("ERROR:")
-              print("The first CSV row does not contain a URL.")
-              print("")
+              print("ERROR: No URL in first row")
               sys.exit(1)
 
           print("")
           print("======================================")
           print("EPISODE SELECTED")
           print("======================================")
-          print("")
-          print(f"Season:  {season}")
+          print(f"Season: {season}")
           print(f"Episode: {episode}")
-          print(f"URL:     {url}")
+          print(f"URL: {url}")
           print("")
 
           with open(
@@ -135,27 +91,10 @@ jobs:
               "a",
               encoding="utf-8"
           ) as out:
-
-              out.write(
-                  f"season={season}\n"
-              )
-
-              out.write(
-                  f"episode={episode}\n"
-              )
-
-              out.write(
-                  f"url={url}\n"
-              )
-
+              out.write(f"url={url}\n")
           PY
 
-
-      # ============================================================
-      # 4. TEST NORMAL YT-DLP EXTRACTION
-      # ============================================================
-
-      - name: List formats without impersonation
+      - name: List Dailymotion streams with Streamlink
         env:
           VIDEO_URL: ${{ steps.source.outputs.url }}
         run: |
@@ -163,280 +102,100 @@ jobs:
 
           echo ""
           echo "======================================"
-          echo "AVAILABLE FORMATS - NORMAL REQUEST"
+          echo "STREAMLINK AVAILABLE QUALITIES"
           echo "======================================"
           echo ""
 
-          yt-dlp \
-            --no-playlist \
-            -F \
+          streamlink \
+            --no-config \
+            --loglevel=debug \
             "$VIDEO_URL"
 
-
-      # ============================================================
-      # 5. TEST CHROME IMPERSONATION
-      # ============================================================
-
-      - name: List formats with Chrome impersonation
-        env:
-          VIDEO_URL: ${{ steps.source.outputs.url }}
-        run: |
-          set -e
-
-          echo ""
-          echo "======================================"
-          echo "AVAILABLE FORMATS - CHROME"
-          echo "======================================"
-          echo ""
-
-          yt-dlp \
-            --no-playlist \
-            --impersonate chrome \
-            -F \
-            "$VIDEO_URL"
-
-
-      # ============================================================
-      # 6. SAVE ALL FORMAT INFORMATION
-      # ============================================================
-
-      - name: Save format information
-        env:
-          VIDEO_URL: ${{ steps.source.outputs.url }}
-        run: |
-          set -e
-
-          echo ""
-          echo "======================================"
-          echo "SAVING FORMAT INFORMATION"
-          echo "======================================"
-          echo ""
-
-          yt-dlp \
-            --no-playlist \
-            --impersonate chrome \
-            -J \
-            "$VIDEO_URL" \
-            > day3a-format-info.json
-
-
-      # ============================================================
-      # 7. ANALYSE AVAILABLE VIDEO QUALITIES
-      # ============================================================
-
-      - name: Analyse available qualities
-        run: |
-          set -e
-
-          python - <<'PY'
-
-          import json
-
-          with open(
-              "day3a-format-info.json",
-              "r",
-              encoding="utf-8"
-          ) as f:
-
-              info = json.load(f)
-
-          formats = (
-              info.get("formats")
-              or []
-          )
-
-          video_formats = []
-
-          for fmt in formats:
-
-              vcodec = fmt.get("vcodec")
-
-              if vcodec not in (
-                  None,
-                  "none"
-              ):
-                  video_formats.append(
-                      fmt
-                  )
-
-          heights = []
-
-          for fmt in video_formats:
-
-              height = fmt.get(
-                  "height"
-              )
-
-              if isinstance(
-                  height,
-                  (int, float)
-              ):
-                  heights.append(
-                      height
-                  )
-
-          print("")
-          print("======================================")
-          print("QUALITY SUMMARY")
-          print("======================================")
-          print("")
-
-          if heights:
-
-              max_height = int(
-                  max(heights)
-              )
-
-              print(
-                  "Highest video height "
-                  f"exposed to yt-dlp: "
-                  f"{max_height}p"
-              )
-
-              print("")
-
-              if max_height >= 1080:
-
-                  print(
-                      "SUCCESS: 1080p or higher "
-                      "is available."
-                  )
-
-              elif max_height >= 720:
-
-                  print(
-                      "SUCCESS: 720p is available "
-                      "to the GitHub runner."
-                  )
-
-              elif max_height >= 480:
-
-                  print(
-                      "WARNING: Only 480p appears "
-                      "to be available."
-                  )
-
-              else:
-
-                  print(
-                      "WARNING: GitHub/yt-dlp is "
-                      "still not seeing the 720p "
-                      "version."
-                  )
-
-          else:
-
-              print(
-                  "Could not determine maximum "
-                  "video resolution."
-              )
-
-          print("")
-          print("======================================")
-          print("VIDEO FORMATS FOUND")
-          print("======================================")
-          print("")
-
-          for fmt in video_formats:
-
-              print(
-                  f"ID: {fmt.get('format_id')} | "
-                  f"Resolution: "
-                  f"{fmt.get('resolution')} | "
-                  f"Height: "
-                  f"{fmt.get('height')} | "
-                  f"FPS: "
-                  f"{fmt.get('fps')} | "
-                  f"Video codec: "
-                  f"{fmt.get('vcodec')} | "
-                  f"Audio codec: "
-                  f"{fmt.get('acodec')} | "
-                  f"Bitrate: "
-                  f"{fmt.get('tbr')}"
-              )
-
-          print("")
-
-          PY
-
-
-      # ============================================================
-      # 8. DOWNLOAD 90 SECOND SAMPLE
-      # ============================================================
-
-      - name: Download 90 second best-quality sample
-        env:
-          VIDEO_URL: ${{ steps.source.outputs.url }}
-        run: |
-          set -e
-
-          echo ""
-          echo "======================================"
-          echo "DOWNLOADING BEST AVAILABLE QUALITY"
-          echo "======================================"
-          echo ""
-
-          yt-dlp \
-            --no-playlist \
-            --impersonate chrome \
-            --download-sections "*0-90" \
-            -f "bv*+ba/b" \
-            --merge-output-format mp4 \
-            -o "day3a-best.%(ext)s" \
-            "$VIDEO_URL"
-
-
-      # ============================================================
-      # 9. LOCATE DOWNLOADED FILE
-      # ============================================================
-
-      - name: Locate downloaded sample
-        id: sample
+      - name: Get best stream URL
+        id: best
         shell: bash
+        env:
+          VIDEO_URL: ${{ steps.source.outputs.url }}
         run: |
           set -euo pipefail
 
-          FILE=$(
-            find . \
-              -maxdepth 1 \
-              -type f \
-              -name 'day3a-best.*' \
-              ! -name '*.part' \
-              | head -n 1
+          echo ""
+          echo "======================================"
+          echo "RESOLVING BEST STREAM"
+          echo "======================================"
+          echo ""
+
+          BEST_URL=$(
+            streamlink \
+              --no-config \
+              --stream-url \
+              "$VIDEO_URL" \
+              best
           )
 
-          if [ -z "$FILE" ]; then
-
-            echo ""
-            echo "ERROR:"
-            echo "Downloaded sample was not found."
-            echo ""
-
-            exit 1
-
+          if [ -z "$BEST_URL" ]; then
+              echo "ERROR: Streamlink did not return a stream URL"
+              exit 1
           fi
 
-          echo ""
-          echo "Downloaded file:"
-          echo "$FILE"
-          echo ""
+          echo "Best stream URL found."
+          echo "$BEST_URL"
 
-          echo "file=$FILE" >> "$GITHUB_OUTPUT"
+          {
+            echo "url<<EOF"
+            echo "$BEST_URL"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
-
-      # ============================================================
-      # 10. VERIFY ACTUAL FINAL VIDEO QUALITY
-      # ============================================================
-
-      - name: Show final sample quality
+      - name: Inspect best HLS stream
         env:
-          SAMPLE_FILE: ${{ steps.sample.outputs.file }}
+          BEST_URL: ${{ steps.best.outputs.url }}
         run: |
           set -e
 
           echo ""
           echo "======================================"
-          echo "FINAL SAMPLE INFORMATION"
+          echo "BEST STREAM INFORMATION"
+          echo "======================================"
+          echo ""
+
+          ffprobe \
+            -v error \
+            -show_entries \
+            stream=index,codec_type,codec_name,width,height,r_frame_rate,bit_rate \
+            -show_entries \
+            format=duration,bit_rate \
+            -of default=noprint_wrappers=1 \
+            "$BEST_URL"
+
+      - name: Download 90 second sample
+        env:
+          BEST_URL: ${{ steps.best.outputs.url }}
+        run: |
+          set -e
+
+          echo ""
+          echo "======================================"
+          echo "DOWNLOADING 90 SECOND SAMPLE"
+          echo "======================================"
+          echo ""
+
+          ffmpeg \
+            -y \
+            -i "$BEST_URL" \
+            -t 90 \
+            -map 0:v:0 \
+            -map 0:a:0? \
+            -c copy \
+            day3a-streamlink-test.mp4
+
+      - name: Verify downloaded sample
+        run: |
+          set -e
+
+          echo ""
+          echo "======================================"
+          echo "FINAL SAMPLE QUALITY"
           echo "======================================"
           echo ""
 
@@ -447,24 +206,12 @@ jobs:
             -show_entries \
             format=duration,size,bit_rate \
             -of default=noprint_wrappers=1 \
-            "$SAMPLE_FILE"
+            day3a-streamlink-test.mp4
 
-          echo ""
-
-
-      # ============================================================
-      # 11. UPLOAD SAMPLE + FORMAT DATA
-      # ============================================================
-
-      - name: Upload test results
+      - name: Upload sample
         uses: actions/upload-artifact@v4
         with:
-          name: day3a-720p-test-results
-
-          path: |
-            day3a-best.*
-            day3a-format-info.json
-
+          name: day3a-streamlink-quality-test
+          path: day3a-streamlink-test.mp4
           retention-days: 1
-
           if-no-files-found: error
