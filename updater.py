@@ -994,15 +994,26 @@ def score_mamlaka(
         url
     )
 
-    lower = decoded.lower()
+lower = decoded.lower()
 
-    if not looks_like_hls(
-        decoded,
-        mime_type,
-    ):
-        return -1
+# Never accept analytics / tracking traffic as a stream.
+if "metrics.brightcove.com" in lower:
+    return -1
 
-    score = 100
+if (
+    mime_type
+    and
+    "image/" in mime_type.lower()
+):
+    return -1
+
+if not looks_like_hls(
+    decoded,
+    mime_type,
+):
+    return -1
+
+score = 100
 
 
     # --------------------------------------------------------
