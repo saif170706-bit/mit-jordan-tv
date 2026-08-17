@@ -241,6 +241,305 @@ def read_network_urls(driver):
 
     return urls
 
+def read_network_responses(driver):
+    """
+    Read Chrome network responses.
+
+    Unlike read_network_urls(), this also gives us:
+    - HTTP status
+    - MIME/content type
+    - request ID
+
+    Used by the dynamic Al Mamlaka scanner.
+    """
+
+    responses = []
+
+    try:
+        logs = driver.get_log(
+            "performance"
+        )
+    except Exception:
+        return responses
+
+    for entry in logs:
+        try:
+            message = json.loads(
+                entry["message"]
+            )["message"]
+        except Exception:
+            continue
+
+        if (
+            message.get("method")
+            != "Network.responseReceived"
+        ):
+            continue
+
+        params = message.get(
+            "params",
+            {}
+        )
+
+        response = params.get(
+            "response",
+            {}
+        )
+
+        url = response.get(
+            "url",
+            ""
+        )
+
+        if not url:
+            continue
+
+        responses.append(
+            {
+                "url": url,
+
+                "status": response.get(
+                    "status",
+                    0
+                ),
+
+                "mime_type": response.get(
+                    "mimeType",
+                    ""
+                ),
+
+                "headers": response.get(
+                    "headers",
+                    {}
+                ),
+
+                "request_id": params.get(
+                    "requestId",
+                    ""
+                ),
+            }
+        )
+
+    return responses
+
+def looks_like_possible_manifest(
+    url,
+    mime_type="",
+):
+    """
+    Very broad first filter.
+
+    IMPORTANT:
+    We are NOT requiring any particular
+    CDN, filename or URL structure.
+
+    Current Brightcove characteristics
+    are only clues.
+    """
+
+    lower_url = (
+        url.lower()
+    )
+
+    lower_mime = (
+        mime_type.lower()
+    )
+
+    mime_clues = [
+        "mpegurl",
+        "m3u",
+        "dash+xml",
+    ]
+
+    url_clues = [
+        ".m3u8",
+        ".mpd",
+        "playlist",
+        "manifest",
+        "master",
+        "hls",
+    ]
+
+    if any(
+        clue in lower_mime
+        for clue in mime_clues
+    ):
+        return True
+
+    if any(
+        clue in lower_url
+        for clue in url_clues
+    ):
+        return True
+
+    return False
+
+
+def validate_manifest_standalone(
+    url,
+):
+    """
+    Test the discovered URL independently.
+
+    This is deliberately NOT using:
+    - browser cookies
+    - Al Mamlaka cookies
+    - Origin header
+    - Referer header
+    - Selenium session
+
+    Therefore a URL is accepted only if it
+    behaves like something OwnTV/VLC can
+    request independently.
+
+    Returns:
+        dict if valid
+        None if invalid
+    """
+
+    try:
+        request = urllib.request.Request(
+            url,
+            method="GET",
+            headers={
+                "User-Agent":
+                    "Mozilla/5.0",
+
+                "Accept":
+                    (
+                        "application/vnd.apple.mpegurl,"
+                        "application/x-mpegURL,"
+                        "application/dash+xml,"
+                        "*/*"
+                    ),
+            },
+        )
+
+        with urllib.request.urlopen(
+            request,
+            timeout=15,
+        ) as response:
+
+            status = (
+                response.status
+            )
+
+            final_url = (
+                response.geturl()
+            )
+
+            content_type = (
+                response.headers.get(
+                    "Content-Type",
+                    ""
+                )
+                .lower()
+            )
+
+            # We only need the beginning of
+            # the manifest for identification.
+            raw = response.read(
+                256 * 1024
+            )
+
+    except Exception:
+        return None
+
+    if not (
+        200 <= status < 300
+    ):
+        return None
+
+    try:
+        text = raw.decode(
+            "utf-8",
+            errors="replace",
+        )
+
+    except Exception:
+        return None
+
+    stripped = text.lstrip()
+
+    # ==========================================
+    # HLS
+    # ==========================================
+
+    if stripped.startswith(
+        "#EXTM3U"
+    ):
+        upper = stripped.upper()
+
+        is_master = (
+            "#EXT-X-STREAM-INF"
+            in upper
+            or
+            "#EXT-X-MEDIA:"
+            in upper
+        )
+
+        is_media = (
+            "#EXTINF:"
+            in upper
+            or
+            "#EXT-X-TARGETDURATION:"
+            in upper
+        )
+
+        is_finished = (
+            "#EXT-X-ENDLIST"
+            in upper
+        )
+
+        return {
+            "url": final_url,
+            "protocol": "hls",
+            "content_type":
+                content_type,
+
+            "is_master":
+                is_master,
+
+            "is_media":
+                is_media,
+
+            "is_live":
+                not is_finished,
+        }
+
+
+    # ==========================================
+    # DASH
+    # ==========================================
+
+    # We don't expect this today, but this makes
+    # discovery less dependent on today's HLS
+    # implementation.
+
+    first_part = (
+        stripped[:5000]
+        .lower()
+    )
+
+    if (
+        "<mpd"
+        in first_part
+    ):
+        return {
+            "url": final_url,
+            "protocol": "dash",
+            "content_type":
+                content_type,
+
+            "is_master": True,
+            "is_media": False,
+            "is_live": (
+                'type="dynamic"'
+                in first_part
+            ),
+        }
+
+    return None
 
 # ==========================================================
 # JAVASCRIPT RESOURCE LIST
@@ -562,54 +861,6 @@ def expand_mamlaka_url(
 
     return results
 
-
-def score_mamlaka(
-    url,
-):
-    decoded = deep_unquote(
-        url
-    )
-
-    lower = decoded.lower()
-
-    if ".m3u8" not in lower:
-        return -1
-
-    if (
-        "brightcove.com"
-        not in lower
-    ):
-        return -1
-
-    score = 100
-
-    if (
-        "fastly.live.brightcove.com"
-        in lower
-    ):
-        score += 120
-
-    if (
-        "playlist-hls-dvr.m3u8"
-        in lower
-    ):
-        score += 200
-
-    elif (
-        "playlist-hls"
-        in lower
-    ):
-        score += 150
-
-    elif (
-        "master"
-        in lower
-    ):
-        score += 80
-
-    return score
-
-
 # ==========================================================
 # GENERIC PAGE SCANNER
 # ==========================================================
@@ -852,15 +1103,16 @@ def scan_almamlaka():
 
     driver = create_driver()
 
+    validated_urls = set()
+
     best_url = None
     best_score = -1
 
-    seen = set()
-
     try:
-        # --------------------------------------------------
-        # 1. Open official Al Mamlaka live page
-        # --------------------------------------------------
+
+        # ==================================================
+        # 1. OPEN THE REAL AL MAMLAKA LIVE PAGE
+        # ==================================================
 
         try:
             driver.get(
@@ -869,301 +1121,430 @@ def scan_almamlaka():
 
         except TimeoutException:
             logging.warning(
-                "Al Mamlaka outer page timed out, "
-                "continuing."
+                "Al Mamlaka page load timed out. "
+                "Continuing."
             )
 
-        time.sleep(6)
+        logging.info(
+            "Al Mamlaka page opened."
+        )
 
-        # --------------------------------------------------
-        # 2. Find Brightcove iframe
-        # --------------------------------------------------
+        time.sleep(7)
 
-        brightcove_url = None
 
-        try:
-            frames = driver.find_elements(
-                By.TAG_NAME,
-                "iframe",
-            )
+        # ==================================================
+        # 2. CLEAR OLD NETWORK LOG
+        #
+        # We want primarily the traffic generated around
+        # playback rather than page-loading advertisements.
+        # ==================================================
 
-            logging.info(
-                "Al Mamlaka: found %d iframe(s).",
-                len(frames),
-            )
-
-            for frame in frames:
-                try:
-                    src = (
-                        frame.get_attribute("src")
-                        or ""
-                    )
-
-                    if (
-                        "players.brightcove.net"
-                        in src.lower()
-                    ):
-                        brightcove_url = src
-
-                        logging.info(
-                            "Al Mamlaka: "
-                            "Brightcove iframe found."
-                        )
-
-                        break
-
-                except Exception:
-                    pass
-
-        except Exception:
-            pass
-
-        # --------------------------------------------------
-        # 3. Fallback: find Brightcove URL in HTML
-        # --------------------------------------------------
-
-        if not brightcove_url:
-            try:
-                source = (
-                    driver.page_source
-                    .replace("\\/", "/")
-                )
-
-                matches = re.findall(
-                    r'https?://players\.brightcove\.net/'
-                    r'[^"\'<>\s]+',
-                    source,
-                    flags=re.IGNORECASE,
-                )
-
-                if matches:
-                    brightcove_url = html.unescape(
-                        matches[0]
-                    )
-
-                    logging.info(
-                        "Al Mamlaka: Brightcove "
-                        "player URL found in HTML."
-                    )
-
-            except Exception:
-                pass
-
-        # --------------------------------------------------
-        # 4. Open Brightcove player DIRECTLY
-        # --------------------------------------------------
-
-        if brightcove_url:
-            try:
-                logging.info(
-                    "Al Mamlaka: opening "
-                    "Brightcove player directly."
-                )
-
-                driver.get(
-                    brightcove_url
-                )
-
-                time.sleep(8)
-
-            except TimeoutException:
-                logging.warning(
-                    "Brightcove player timed out, "
-                    "continuing."
-                )
-
-        else:
-            logging.warning(
-                "Al Mamlaka: Brightcove iframe "
-                "was not found."
-            )
-
-        # Clear old performance messages so that
-        # the following scan mainly sees player traffic.
         try:
             driver.get_log(
                 "performance"
             )
+
         except Exception:
             pass
 
-        # --------------------------------------------------
-        # 5. Force player to start
-        # --------------------------------------------------
+
+        # ==================================================
+        # 3. START PLAYBACK
+        # ==================================================
+
+        logging.info(
+            "Attempting to start "
+            "Al Mamlaka player..."
+        )
 
         try_start_playback(
             driver
         )
 
-        # --------------------------------------------------
-        # 6. Watch Brightcove traffic
-        # --------------------------------------------------
+        time.sleep(2)
 
-        for second in range(100):
 
-            if second % 3 == 0:
+        # ==================================================
+        # 4. WATCH ACTUAL NETWORK TRAFFIC
+        #
+        # We repeatedly press Play because Brightcove/player
+        # initialization may take several seconds.
+        # ==================================================
+
+        start_time = time.time()
+
+        timeout_seconds = 120
+
+
+        while (
+            time.time()
+            - start_time
+            < timeout_seconds
+        ):
+
+            elapsed = int(
+                time.time()
+                - start_time
+            )
+
+
+            # ----------------------------------------------
+            # Keep nudging the real player
+            # ----------------------------------------------
+
+            if (
+                elapsed % 4 == 0
+            ):
                 try_start_playback(
                     driver
                 )
 
-            candidates = []
 
-            candidates.extend(
-                read_network_urls(
+            # ----------------------------------------------
+            # Read actual NETWORK RESPONSES
+            # ----------------------------------------------
+
+            responses = (
+                read_network_responses(
                     driver
                 )
             )
 
-            if second % 5 == 0:
-                candidates.extend(
-                    get_resource_urls(
-                        driver
+
+            for response_info in responses:
+
+                url = (
+                    response_info
+                    .get(
+                        "url",
+                        ""
                     )
                 )
 
-            if second % 10 == 0:
-                candidates.extend(
-                    urls_from_page_source(
-                        driver
-                    )
-                )
-
-            expanded = []
-
-            for candidate in candidates:
-
-                if not candidate:
+                if not url:
                     continue
 
-                if candidate in seen:
+
+                status = (
+                    response_info
+                    .get(
+                        "status",
+                        0
+                    )
+                )
+
+                mime_type = (
+                    response_info
+                    .get(
+                        "mime_type",
+                        ""
+                    )
+                )
+
+
+                # We only inspect successful server
+                # responses.
+
+                if not (
+                    200
+                    <= status
+                    < 300
+                ):
                     continue
 
-                seen.add(
-                    candidate
-                )
 
-                expanded.append(
-                    candidate
-                )
+                # ------------------------------------------
+                # BROAD manifest detection
+                #
+                # This is intentionally not tied to
+                # Brightcove or today's filename.
+                # ------------------------------------------
 
-                # Brightcove metrics sometimes contains
-                # the real HLS URL in media_url=
-                try:
-                    extra_urls = (
-                        expand_mamlaka_url(
-                            candidate
-                        )
+                if not looks_like_possible_manifest(
+                    url,
+                    mime_type,
+                ):
+                    continue
+
+
+                decoded_url = (
+                    deep_unquote(
+                        url
                     )
-
-                    expanded.extend(
-                        extra_urls
-                    )
-
-                except Exception:
-                    pass
-
-            # --------------------------------------------------
-            # 7. Examine every candidate
-            # --------------------------------------------------
-
-            for candidate in expanded:
-
-                decoded = deep_unquote(
-                    candidate
                 )
 
-                lower = decoded.lower()
-
-                # ----------------------------------------------
-                # BEST POSSIBLE RESULT
-                # ----------------------------------------------
 
                 if (
-                    "fastly.live.brightcove.com"
-                    in lower
-                    and
-                    "playlist-hls-dvr.m3u8"
-                    in lower
+                    decoded_url
+                    in validated_urls
                 ):
+                    continue
+
+
+                validated_urls.add(
+                    decoded_url
+                )
+
+
+                logging.info(
+                    "Al Mamlaka possible "
+                    "manifest seen in network: %s",
+                    safe_url_for_log(
+                        decoded_url
+                    ),
+                )
+
+
+                # ==========================================
+                # 5. TEST IT INDEPENDENTLY
+                #
+                # No Selenium cookies.
+                # No Origin.
+                # No Referer.
+                #
+                # This approximates how OwnTV/VLC would
+                # request the URL.
+                # ==========================================
+
+                validation = (
+                    validate_manifest_standalone(
+                        decoded_url
+                    )
+                )
+
+
+                if not validation:
+
                     logging.info(
-                        "Al Mamlaka: DIRECT DVR "
-                        "master found: %s",
+                        "Rejected candidate because "
+                        "it did not work as an "
+                        "independent stream manifest: %s",
                         safe_url_for_log(
-                            decoded
+                            decoded_url
                         ),
                     )
 
-                    return decoded
-
-                # ----------------------------------------------
-                # OTHERWISE SCORE OTHER HLS MASTER URLS
-                # ----------------------------------------------
-
-                try:
-                    score = score_mamlaka(
-                        decoded
-                    )
-
-                except Exception:
                     continue
 
-                if score > best_score:
 
-                    best_score = score
-                    best_url = decoded
+                # ==========================================
+                # 6. SCORE VALIDATED STREAM
+                # ==========================================
 
-                    if score >= 0:
-                        logging.info(
-                            "Al Mamlaka candidate: "
-                            "%s (score=%d)",
-                            safe_url_for_log(
-                                decoded
-                            ),
-                            score,
-                        )
+                score = (
+                    score_mamlaka_candidate(
+                        decoded_url,
+                        response_info,
+                        validation,
+                    )
+                )
 
-            # Give Brightcove enough time to initialize,
-            # but stop early once we have a very good URL.
 
-            if (
-                second >= 20
-                and
-                best_url
-                and
-                best_score >= 350
-            ):
-                break
+                if (
+                    score
+                    > best_score
+                ):
+                    best_score = (
+                        score
+                    )
+
+                    best_url = (
+                        validation[
+                            "url"
+                        ]
+                    )
+
+                    logging.info(
+                        "Al Mamlaka NEW BEST "
+                        "validated stream: %s "
+                        "(score=%d)",
+                        safe_url_for_log(
+                            best_url
+                        ),
+                        best_score,
+                    )
+
+
+                # ==========================================
+                # 7. VERY HIGH CONFIDENCE RESULT
+                #
+                # Today's known DVR master should score
+                # extremely high.
+                #
+                # BUT we aren't requiring this exact URL.
+                # ==========================================
+
+                if (
+                    best_score
+                    >= 3000
+                ):
+                    logging.info(
+                        "Al Mamlaka high-confidence "
+                        "stream found."
+                    )
+
+                    return best_url
+
 
             time.sleep(1)
 
-        # --------------------------------------------------
-        # 8. Return best non-DVR candidate if needed
-        # --------------------------------------------------
 
-        if (
-            best_url
-            and
-            best_score >= 0
-        ):
+        # ==================================================
+        # 8. TIMEOUT FINISHED
+        #
+        # If we found any independently validated manifest,
+        # use the best one.
+        # ==================================================
+
+        if best_url:
+
             logging.info(
-                "Al Mamlaka: selected %s",
+                "Al Mamlaka selected best "
+                "validated stream after full scan: %s "
+                "(score=%d)",
                 safe_url_for_log(
                     best_url
                 ),
+                best_score,
             )
 
             return best_url
 
+
+        # ==================================================
+        # 9. NOTHING VALID FOUND
+        #
+        # IMPORTANT:
+        # We do NOT invent a URL.
+        # We do NOT use a hard-coded fallback.
+        #
+        # main() therefore doesn't send an Al Mamlaka
+        # update and KV keeps its previous value.
+        # ==================================================
+
         logging.error(
-            "Al Mamlaka TV: "
-            "no usable Brightcove stream found."
+            "Al Mamlaka: no independently "
+            "validated live manifest was discovered."
         )
 
         return None
 
+
     finally:
         driver.quit()
 
+
+    # ==========================================
+    # ACTUAL MANIFEST CHARACTERISTICS
+    # ==========================================
+
+    if (
+        validation["protocol"]
+        == "hls"
+    ):
+        score += 300
+
+    elif (
+        validation["protocol"]
+        == "dash"
+    ):
+        score += 200
+
+
+    # Prefer a master playlist over a
+    # specific rendition/media playlist.
+
+    if validation.get(
+        "is_master"
+    ):
+        score += 500
+
+    if validation.get(
+        "is_live"
+    ):
+        score += 300
+
+    if validation.get(
+        "is_media"
+    ):
+        score += 100
+
+
+    # ==========================================
+    # SERVER MIME TYPE
+    # ==========================================
+
+    if (
+        "mpegurl"
+        in mime
+    ):
+        score += 150
+
+    if (
+        "dash+xml"
+        in mime
+    ):
+        score += 150
+
+
+    # ==========================================
+    # CURRENT KNOWN AL MAMLAKA CHARACTERISTICS
+    #
+    # IMPORTANT:
+    # These are bonuses, NOT requirements.
+    # ==========================================
+
+    if (
+        "playlist-hls-dvr.m3u8"
+        in lower
+    ):
+        score += 600
+
+    if (
+        "fastly.live.brightcove.com"
+        in lower
+    ):
+        score += 400
+
+    if (
+        "brightcove"
+        in lower
+    ):
+        score += 100
+
+
+    # Generic hints
+
+    if ".m3u8" in lower:
+        score += 100
+
+    if "master" in lower:
+        score += 50
+
+    if "playlist" in lower:
+        score += 50
+
+
+    logging.info(
+        "Al Mamlaka validated manifest: "
+        "%s | protocol=%s | "
+        "master=%s | live=%s | score=%d",
+        safe_url_for_log(
+            url
+        ),
+        validation[
+            "protocol"
+        ],
+        validation.get(
+            "is_master"
+        ),
+        validation.get(
+            "is_live"
+        ),
+        score,
+    )
+
+    return score
 
 # ==========================================================
 # SEND STREAMS TO CLOUDFLARE
