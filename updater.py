@@ -1111,30 +1111,43 @@ def score_mamlaka(
 
 
 def scan_almamlaka():
-    logging.info("====================================")
-    logging.info("Scanning Al Mamlaka TV")
-    logging.info("Page: %s", ALMAMLAKA_PAGE)
+    logging.info(
+        "===================================="
+    )
+
+    logging.info(
+        "Scanning Al Mamlaka TV"
+    )
+
+    logging.info(
+        "Page: %s",
+        ALMAMLAKA_PAGE,
+    )
 
     driver = create_driver()
 
     best_url = None
     best_score = -1
+
     best_found_at = None
 
     seen = set()
 
     try:
+
         # ====================================================
         # 1. OPEN OFFICIAL AL MAMLAKA PAGE
         # ====================================================
 
         try:
-            driver.get(ALMAMLAKA_PAGE)
+            driver.get(
+                ALMAMLAKA_PAGE
+            )
 
         except TimeoutException:
             logging.warning(
-                "Al Mamlaka: official page timed out; "
-                "continuing."
+                "Al Mamlaka: official page "
+                "timed out; continuing."
             )
 
         logging.info(
@@ -1145,7 +1158,7 @@ def scan_almamlaka():
 
 
         # ====================================================
-        # 2. FIND THE REAL BRIGHTCOVE PLAYER IFRAME
+        # 2. FIND THE REAL BRIGHTCOVE PLAYER
         # ====================================================
 
         player_url = None
@@ -1165,9 +1178,9 @@ def scan_almamlaka():
 
                 try:
                     src = (
-                        frame.get_attribute("src")
-                        or
-                        frame.get_attribute("data-src")
+                        frame.get_attribute(
+                            "src"
+                        )
                         or
                         ""
                     )
@@ -1180,7 +1193,9 @@ def scan_almamlaka():
 
                 logging.info(
                     "Al Mamlaka iframe: %s",
-                    safe_url_for_log(src),
+                    safe_url_for_log(
+                        src
+                    ),
                 )
 
                 if (
@@ -1194,53 +1209,26 @@ def scan_almamlaka():
             pass
 
 
-        # ====================================================
-        # 3. FALLBACK: FIND PLAYER URL IN PAGE HTML
-        #
-        # This is NOT a stream fallback.
-        # We are only locating the actual embedded player.
-        # ====================================================
-
-        if not player_url:
-
-            try:
-                source = (
-                    driver.page_source
-                    .replace("\\/", "/")
-                )
-
-                matches = re.findall(
-                    r'https?:?//players\.brightcove\.net/'
-                    r'[^"\'<>\s]+',
-                    source,
-                    flags=re.IGNORECASE,
-                )
-
-                if matches:
-
-                    player_url = html.unescape(
-                        matches[0]
-                    )
-
-            except Exception:
-                pass
-
-
         if not player_url:
 
             logging.error(
-                "Al Mamlaka: could not locate "
-                "the embedded video player."
+                "Al Mamlaka: Brightcove "
+                "player iframe was not found."
             )
 
             return None
 
 
-        # Handle //players.brightcove.net/... etc.
-        player_url = urllib.parse.urljoin(
-            ALMAMLAKA_PAGE,
-            player_url,
+        # Make sure relative/protocol-relative
+        # iframe URLs become absolute.
+
+        player_url = (
+            urllib.parse.urljoin(
+                ALMAMLAKA_PAGE,
+                player_url,
+            )
         )
+
 
         logging.info(
             "Al Mamlaka: video player found: %s",
@@ -1251,37 +1239,10 @@ def scan_almamlaka():
 
 
         # ====================================================
-        # 4. IMPORTANT:
+        # 3. DISABLE CACHE
         #
-        # OPEN THE PLAYER DIRECTLY.
-        #
-        # It is now the TOP-LEVEL PAGE instead of a
-        # cross-origin iframe.
-        #
-        # Therefore Chrome performance logging should see
-        # the same stream requests you see in DevTools.
-        # ====================================================
-
-        logging.info(
-            "Al Mamlaka: opening player directly..."
-        )
-
-        try:
-            driver.get(
-                player_url
-            )
-
-        except TimeoutException:
-            logging.warning(
-                "Al Mamlaka: player page timed out; "
-                "continuing."
-            )
-
-        time.sleep(4)
-
-
-        # ====================================================
-        # 5. DISABLE CACHE
+        # We want the manifest request to happen again
+        # when we refresh the player.
         # ====================================================
 
         try:
@@ -1290,6 +1251,10 @@ def scan_almamlaka():
                 {
                     "cacheDisabled": True
                 },
+            )
+
+            logging.info(
+                "Al Mamlaka: Chrome cache disabled."
             )
 
         except Exception:
@@ -1309,18 +1274,46 @@ def scan_almamlaka():
 
 
         # ====================================================
-        # 6. CLEAR EXISTING NETWORK LOG
+        # 4. OPEN BRIGHTCOVE PLAYER AS MAIN PAGE
+        # ====================================================
+
+        logging.info(
+            "Al Mamlaka: opening "
+            "Brightcove player directly..."
+        )
+
+        try:
+            driver.get(
+                player_url
+            )
+
+        except TimeoutException:
+            logging.warning(
+                "Al Mamlaka: player load "
+                "timed out; continuing."
+            )
+
+        time.sleep(4)
+
+
+        # ====================================================
+        # 5. CLEAR NETWORK LOG
         #
-        # Equivalent to:
-        #
-        # DevTools Network is already open
-        # ↓
-        # then you press Refresh
+        # Equivalent to having DevTools Network open
+        # BEFORE pressing Refresh.
         # ====================================================
 
         try:
-            read_performance_urls(
-                driver
+            old_entries = (
+                read_network_entries(
+                    driver
+                )
+            )
+
+            logging.info(
+                "Al Mamlaka: cleared %d "
+                "pre-refresh network event(s).",
+                len(old_entries),
             )
 
         except Exception:
@@ -1328,16 +1321,17 @@ def scan_almamlaka():
 
 
         # ====================================================
-        # 7. REFRESH THE PLAYER
+        # 6. REFRESH PLAYER
         #
-        # DO NOT PRESS PLAY.
+        # NO PLAY BUTTON.
         #
-        # Al Mamlaka/Brightcove autoplays.
+        # You confirmed that the player autoplays.
         # ====================================================
 
         logging.info(
-            "Al Mamlaka: REFRESHING player "
-            "with network monitoring active..."
+            "Al Mamlaka: REFRESHING "
+            "Brightcove player with "
+            "network monitoring active..."
         )
 
         try:
@@ -1345,8 +1339,8 @@ def scan_almamlaka():
 
         except TimeoutException:
             logging.warning(
-                "Al Mamlaka: player refresh timed out; "
-                "continuing capture."
+                "Al Mamlaka: player refresh "
+                "timed out; continuing."
             )
 
 
@@ -1357,154 +1351,260 @@ def scan_almamlaka():
 
 
         # ====================================================
-        # 8. SAME BASIC SYSTEM AS ROYA:
-        #    READ NETWORK URLS
+        # 7. WATCH NETWORK EXACTLY LIKE ROYA
         # ====================================================
 
-        start = time.time()
+        start_time = time.time()
 
         while (
             time.time()
-            - start
+            - start_time
             < 40
         ):
 
-            candidates = []
+            # =================================================
+            # A. REAL CHROME NETWORK REQUESTS + RESPONSES
+            # =================================================
 
-
-            # Actual Chrome network traffic.
-            candidates.extend(
-                read_performance_urls(
+            entries = (
+                read_network_entries(
                     driver
                 )
             )
 
 
-            # Also inspect current player resources/source.
-            candidates.extend(
-                collect_frame_urls(
-                    driver
+            for entry in entries:
+
+                raw_url = (
+                    entry.get(
+                        "url",
+                        "",
+                    )
                 )
-            )
 
-
-            for raw in candidates:
-
-                if not raw:
+                if not raw_url:
                     continue
 
 
-                # A stream URL can appear directly or encoded
-                # inside another network URL.
-                expanded = (
-                    expand_url_strings(
-                        raw
+                url = deep_unquote(
+                    raw_url
+                )
+
+                mime_type = (
+                    entry.get(
+                        "mime_type",
+                        "",
+                    )
+                    or
+                    ""
+                )
+
+
+                # ---------------------------------------------
+                # Look for actual HLS traffic.
+                #
+                # Not restricted to Brightcove.
+                # Not restricted to a specific filename.
+                # ---------------------------------------------
+
+                if not looks_like_hls(
+                    url,
+                    mime_type,
+                ):
+                    continue
+
+
+                identity = (
+                    entry.get(
+                        "kind",
+                        "",
+                    ),
+                    url,
+                )
+
+
+                if identity in seen:
+                    continue
+
+                seen.add(
+                    identity
+                )
+
+
+                # ---------------------------------------------
+                # Score it using our existing Al Mamlaka
+                # scoring.
+                #
+                # Current known correct characteristics:
+                #
+                # fastly.live.brightcove.com
+                # playlist-hls-dvr.m3u8
+                #
+                # get strong bonuses but are NOT required.
+                # ---------------------------------------------
+
+                score = score_mamlaka(
+                    url,
+                    mime_type=mime_type,
+                    status=entry.get(
+                        "status"
+                    ),
+                    kind=entry.get(
+                        "kind",
+                        "request",
+                    ),
+                )
+
+
+                if score < 0:
+                    continue
+
+
+                logging.info(
+                    "Al Mamlaka HLS candidate: "
+                    "%s | kind=%s | "
+                    "status=%s | mime=%s | "
+                    "score=%d",
+                    safe_url_for_log(
+                        url
+                    ),
+                    entry.get(
+                        "kind"
+                    ),
+                    entry.get(
+                        "status"
+                    ),
+                    mime_type
+                    or
+                    "<unknown>",
+                    score,
+                )
+
+
+                if (
+                    score
+                    > best_score
+                ):
+
+                    best_score = score
+                    best_url = url
+
+                    best_found_at = (
+                        time.time()
+                    )
+
+
+                    logging.info(
+                        "Al Mamlaka NEW BEST: %s "
+                        "(score=%d)",
+                        safe_url_for_log(
+                            best_url
+                        ),
+                        best_score,
+                    )
+
+
+            # =================================================
+            # B. RESOURCE TIMING AS EXTRA SAFETY
+            #
+            # Still the same player.
+            # No HTML scraping or fallback URL.
+            # =================================================
+
+            try:
+                resource_urls = (
+                    get_resource_urls(
+                        driver
                     )
                 )
 
-                if not expanded:
-                    expanded = [
-                        raw
-                    ]
+            except Exception:
+                resource_urls = []
 
 
-                for candidate in expanded:
+            for raw_url in resource_urls:
 
-                    candidate = (
-                        deep_unquote(
-                            candidate
-                        )
-                    )
-
-                    if not is_hls_url(
-                        candidate
-                    ):
-                        continue
+                if not raw_url:
+                    continue
 
 
-                    if candidate in seen:
-                        continue
+                url = deep_unquote(
+                    raw_url
+                )
 
-                    seen.add(
-                        candidate
+
+                if not looks_like_hls(
+                    url,
+                    "",
+                ):
+                    continue
+
+
+                identity = (
+                    "resource",
+                    url,
+                )
+
+
+                if identity in seen:
+                    continue
+
+                seen.add(
+                    identity
+                )
+
+
+                score = score_mamlaka(
+                    url,
+                    mime_type="",
+                    status=None,
+                    kind="request",
+                )
+
+
+                if score < 0:
+                    continue
+
+
+                logging.info(
+                    "Al Mamlaka HLS resource: "
+                    "%s (score=%d)",
+                    safe_url_for_log(
+                        url
+                    ),
+                    score,
+                )
+
+
+                if (
+                    score
+                    > best_score
+                ):
+
+                    best_score = score
+                    best_url = url
+
+                    best_found_at = (
+                        time.time()
                     )
 
 
                     logging.info(
-                        "Al Mamlaka HLS candidate found: %s",
+                        "Al Mamlaka NEW BEST: %s "
+                        "(score=%d)",
                         safe_url_for_log(
-                            candidate
+                            best_url
                         ),
+                        best_score,
                     )
 
 
-                    # =================================================
-                    # 9. CONFIRM IT ACTUALLY WORKS DIRECTLY
-                    # =================================================
-
-                    check = (
-                        validate_hls_standalone(
-                            candidate
-                        )
-                    )
-
-
-                    if not check:
-
-                        logging.info(
-                            "Al Mamlaka: candidate "
-                            "rejected by direct test."
-                        )
-
-                        continue
-
-
-                    score = score_mamlaka(
-                        check["url"],
-                        check,
-                    )
-
-
-                    logging.info(
-                        "Al Mamlaka VALID candidate: "
-                        "%s | master=%s | "
-                        "live=%s | score=%d",
-                        safe_url_for_log(
-                            check["url"]
-                        ),
-                        check["is_master"],
-                        check["is_live"],
-                        score,
-                    )
-
-
-                    if (
-                        score
-                        > best_score
-                    ):
-
-                        best_score = score
-
-                        best_url = (
-                            check["url"]
-                        )
-
-                        best_found_at = (
-                            time.time()
-                        )
-
-
-                        logging.info(
-                            "Al Mamlaka NEW BEST: %s",
-                            safe_url_for_log(
-                                best_url
-                            ),
-                        )
-
-
-            # After finding something valid, wait another
-            # few seconds because the real master may appear
-            # immediately after a child playlist.
+            # =================================================
+            # 8. ONCE FOUND, WAIT A FEW SECONDS
+            #
+            # This gives the master playlist time to appear
+            # if we initially saw a child playlist.
+            # =================================================
 
             if (
                 best_url
@@ -1515,6 +1615,7 @@ def scan_almamlaka():
                 - best_found_at
                 >= 6
             ):
+
                 break
 
 
@@ -1524,7 +1625,7 @@ def scan_almamlaka():
 
 
         # ====================================================
-        # 10. RESULT
+        # 9. RETURN BEST URL
         # ====================================================
 
         if best_url:
@@ -1543,9 +1644,8 @@ def scan_almamlaka():
 
         logging.error(
             "Al Mamlaka TV: no usable "
-            "HLS stream was seen while "
-            "the Brightcove player was "
-            "running as the top-level page."
+            "HLS URL appeared in the "
+            "Brightcove player's network traffic."
         )
 
         return None
