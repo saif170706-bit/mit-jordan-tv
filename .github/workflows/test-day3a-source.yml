@@ -1,0 +1,145 @@
+name: Test Day3a HLS Source
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+          echo "FFmpeg version:"
+          ffmpeg -version | head -n 1
+
+      - name: Test Dailymotion HLS and create sample
+        env:
+          SOURCE_URL: ${{ secrets.DAY3A_TEST_M3U8 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SOURCE_URL:-}" ]; then
+            echo "ERROR: DAY3A_TEST_M3U8 secret is missing."
+            exit 1
+          fi
+
+          USER_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/150 Safari/537.36"
+
+          HEADERS=$'Origin: https://geo.dailymotion.com\r\nReferer: https://geo.dailymotion.com/\r\n'
+
+          echo "===================================="
+          echo "Testing HLS source from GitHub runner"
+          echo "===================================="
+
+          echo "Trying source directly first..."
+
+          if ffprobe \
+            -v error \
+            -select_streams v:0 \
+            -show_entries stream=codec_name,width,height,r_frame_rate \
+            -show_entries format=format_name,duration \
+            -of default=noprint_wrappers=1 \
+            "$SOURCE_URL" \
+            > source-info.txt 2>/dev/null
+          then
+
+            echo "Direct access works."
+            USE_HEADERS="no"
+
+          else
+
+            echo "Direct access failed."
+            echo "Retrying with the same Origin/Referer context seen in the browser..."
+
+            ffprobe \
+              -v error \
+              -user_agent "$USER_AGENT" \
+              -headers "$HEADERS" \
+              -select_streams v:0 \
+              -show_entries stream=codec_name,width,height,r_frame_rate \
+              -show_entries format=format_name,duration \
+              -of default=noprint_wrappers=1 \
+              "$SOURCE_URL" \
+              > source-info.txt
+
+            USE_HEADERS="yes"
+          fi
+
+          echo
+          echo "Source information:"
+          cat source-info.txt
+
+          echo
+          echo "===================================="
+          echo "Creating a 90-second test video"
+          echo "===================================="
+
+          if [ "$USE_HEADERS" = "yes" ]; then
+
+            ffmpeg \
+              -hide_banner \
+              -loglevel warning \
+              -y \
+              -user_agent "$USER_AGENT" \
+              -headers "$HEADERS" \
+              -i "$SOURCE_URL" \
+              -t 90 \
+              -map 0:v:0 \
+              -map 0:a:0? \
+              -c:v copy \
+              -c:a copy \
+              -movflags +faststart \
+              day3a-test.mp4
+
+          else
+
+            ffmpeg \
+              -hide_banner \
+              -loglevel warning \
+              -y \
+              -i "$SOURCE_URL" \
+              -t 90 \
+              -map 0:v:0 \
+              -map 0:a:0? \
+              -c:v copy \
+              -c:a copy \
+              -movflags +faststart \
+              day3a-test.mp4
+
+          fi
+
+          echo
+          echo "===================================="
+          echo "Checking created file"
+          echo "===================================="
+
+          ffprobe \
+            -v error \
+            -show_entries format=duration,size \
+            -show_entries stream=codec_type,codec_name,width,height \
+            -of default=noprint_wrappers=1 \
+            day3a-test.mp4
+
+          echo
+          echo "SUCCESS: GitHub created the test episode file."
+
+      - name: Upload test video
+        uses: actions/upload-artifact@v4
+        with:
+          name: day3a-test-sample
+          path: |
+            day3a-test.mp4
+            source-info.txt
+          retention-days: 1
