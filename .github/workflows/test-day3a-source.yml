@@ -1,51 +1,957 @@
-name: Test Direct Day3a 720p HLS
+name: Test Day3a Browser 720p Discovery
 
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
 
     steps:
-      - name: Install FFmpeg
+
+      # ============================================================
+      # 1. CHECKOUT REPOSITORY
+      # ============================================================
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+
+      # ============================================================
+      # 2. INSTALL PLAYWRIGHT + CHROMIUM + FFMPEG
+      # ============================================================
+
+      - name: Install browser tools
         run: |
+          set -e
+
+          python -m pip install --upgrade pip
+          python -m pip install playwright
+
+          playwright install --with-deps chromium
+
           sudo apt-get update
           sudo apt-get install -y ffmpeg
 
-      - name: Test direct 720p HLS
+          echo ""
+          echo "======================================"
+          echo "PLAYWRIGHT INSTALLED"
+          echo "======================================"
+
+          python -c "import playwright; print('Playwright OK')"
+
+          echo ""
+          echo "======================================"
+          echo "FFMPEG"
+          echo "======================================"
+
+          ffmpeg -version | head -n 1
+
+
+      # ============================================================
+      # 3. READ FIRST EPISODE FROM CSV
+      # ============================================================
+
+      - name: Read first episode
+        id: source
         shell: bash
+        run: |
+          set -euo pipefail
+
+          python - <<'PY'
+          import csv
+          import os
+          import sys
+
+          filename = "day3a_sources.csv"
+
+          if not os.path.exists(filename):
+              print("ERROR: day3a_sources.csv was not found.")
+              sys.exit(1)
+
+          with open(
+              filename,
+              "r",
+              encoding="utf-8-sig",
+              newline=""
+          ) as f:
+              rows = list(csv.DictReader(f))
+
+          if not rows:
+              print("ERROR: CSV contains no episodes.")
+              sys.exit(1)
+
+          row = rows[0]
+
+          season = (row.get("season") or "").strip()
+          episode = (row.get("episode") or "").strip()
+          url = (row.get("url") or "").strip()
+
+          if not url:
+              print("ERROR: First CSV row has no URL.")
+              sys.exit(1)
+
+          print("")
+          print("======================================")
+          print("EPISODE")
+          print("======================================")
+          print(f"Season:  {season}")
+          print(f"Episode: {episode}")
+          print(f"URL:     {url}")
+
+          with open(
+              os.environ["GITHUB_OUTPUT"],
+              "a",
+              encoding="utf-8"
+          ) as out:
+              out.write(f"url={url}\n")
+
+          PY
+
+
+      # ============================================================
+      # 4. CREATE BROWSER NETWORK SCANNER
+      # ============================================================
+
+      - name: Create Dailymotion browser scanner
+        run: |
+          cat > scan_dailymotion.py <<'PY'
+
+          import os
+          import re
+          import json
+          import time
+          import subprocess
+
+          from urllib.parse import (
+              urljoin,
+              unquote,
+          )
+
+          from playwright.sync_api import sync_playwright
+
+
+          VIDEO_URL = os.environ["VIDEO_URL"]
+
+          candidates = {}
+          captured_responses = []
+
+
+          # --------------------------------------------------------
+          # Helpers
+          # --------------------------------------------------------
+
+          def deep_unquote(value):
+              current = value
+
+              for _ in range(4):
+                  decoded = unquote(current)
+
+                  if decoded == current:
+                      break
+
+                  current = decoded
+
+              return current
+
+
+          def looks_like_hls(url, content_type=""):
+              lower = url.lower()
+              mime = (content_type or "").lower()
+
+              return (
+                  ".m3u8" in lower
+                  or "mpegurl" in mime
+              )
+
+
+          def score_candidate(url):
+              lower = deep_unquote(url).lower()
+
+              score = 0
+
+              if ".m3u8" in lower:
+                  score += 100
+
+              if "dmcdn.net" in lower:
+                  score += 300
+
+              if "cdndirector.dailymotion.com" in lower:
+                  score += 150
+
+              if "_hd_" in lower:
+                  score += 2000
+
+              if "h264_aac_hd" in lower:
+                  score += 2000
+
+              if "720" in lower:
+                  score += 700
+
+              if "1080" in lower:
+                  score += 900
+
+              if "master" in lower:
+                  score += 300
+
+              if "manifest" in lower:
+                  score += 250
+
+              # Known low-resolution playlist from our previous test.
+              if (
+                  "_mp4_h264_aac_6.m3u8" in lower
+                  and "_hd_" not in lower
+              ):
+                  score -= 500
+
+              return score
+
+
+          def add_candidate(url, source):
+              if not url:
+                  return
+
+              decoded = deep_unquote(url)
+
+              if ".m3u8" not in decoded.lower():
+                  return
+
+              old = candidates.get(decoded)
+
+              item = {
+                  "url": decoded,
+                  "source": source,
+                  "score": score_candidate(decoded),
+              }
+
+              if old is None or item["score"] > old["score"]:
+                  candidates[decoded] = item
+
+
+          def extract_playlist_urls(base_url, body):
+              if not body:
+                  return
+
+              # Direct absolute URLs appearing anywhere in response.
+              for match in re.findall(
+                  r'https?://[^\s"\'<>]+',
+                  body
+              ):
+                  cleaned = match.strip()
+
+                  add_candidate(
+                      cleaned,
+                      "playlist-body-absolute"
+                  )
+
+              # Normal HLS playlist lines.
+              for raw_line in body.splitlines():
+                  line = raw_line.strip()
+
+                  if not line:
+                      continue
+
+                  if line.startswith("#"):
+                      # Some manifest attributes may contain URI="..."
+                      for match in re.findall(
+                          r'URI=["\']([^"\']+)["\']',
+                          line
+                      ):
+                          resolved = urljoin(
+                              base_url,
+                              match
+                          )
+
+                          add_candidate(
+                              resolved,
+                              "playlist-attribute"
+                          )
+
+                      continue
+
+                  if ".m3u8" in line.lower():
+                      resolved = urljoin(
+                          base_url,
+                          line
+                      )
+
+                      add_candidate(
+                          resolved,
+                          "playlist-line"
+                      )
+
+
+          # --------------------------------------------------------
+          # Network handlers
+          # --------------------------------------------------------
+
+          def on_request(request):
+              url = request.url
+
+              if ".m3u8" in url.lower():
+                  print("")
+                  print("HLS REQUEST:")
+                  print(url)
+
+                  add_candidate(
+                      url,
+                      "browser-request"
+                  )
+
+
+          def on_response(response):
+              url = response.url
+
+              try:
+                  headers = response.all_headers()
+              except Exception:
+                  headers = {}
+
+              content_type = (
+                  headers.get("content-type", "")
+                  if headers
+                  else ""
+              )
+
+              if not looks_like_hls(
+                  url,
+                  content_type
+              ):
+                  return
+
+              print("")
+              print("======================================")
+              print("HLS RESPONSE")
+              print("======================================")
+              print("Status:", response.status)
+              print("Content-Type:", content_type)
+              print("URL:")
+              print(url)
+
+              add_candidate(
+                  url,
+                  "browser-response"
+              )
+
+              body = ""
+
+              try:
+                  body = response.text()
+              except Exception as exc:
+                  print(
+                      "Could not read response body:",
+                      exc
+                  )
+
+              if body:
+                  print("")
+                  print("PLAYLIST BODY:")
+                  print("--------------------------------------")
+                  print(body[:10000])
+                  print("--------------------------------------")
+
+                  extract_playlist_urls(
+                      url,
+                      body
+                  )
+
+                  captured_responses.append({
+                      "url": url,
+                      "status": response.status,
+                      "content_type": content_type,
+                      "body": body,
+                  })
+
+
+          # --------------------------------------------------------
+          # Launch real Chromium
+          # --------------------------------------------------------
+
+          print("")
+          print("======================================")
+          print("OPENING DAILYMOTION IN CHROMIUM")
+          print("======================================")
+          print(VIDEO_URL)
+
+
+          with sync_playwright() as p:
+
+              browser = p.chromium.launch(
+                  headless=True,
+                  args=[
+                      "--autoplay-policy=no-user-gesture-required",
+                      "--disable-dev-shm-usage",
+                      "--no-sandbox",
+                  ],
+              )
+
+              context = browser.new_context(
+                  viewport={
+                      "width": 1920,
+                      "height": 1080,
+                  },
+                  locale="da-DK",
+                  user_agent=(
+                      "Mozilla/5.0 "
+                      "(Windows NT 10.0; Win64; x64) "
+                      "AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) "
+                      "Chrome/151.0.0.0 "
+                      "Safari/537.36"
+                  ),
+                  extra_http_headers={
+                      "Accept-Language":
+                          "da-DK,da;q=0.9,en-US;q=0.8,en;q=0.7"
+                  },
+              )
+
+              # BrowserContext listeners also see traffic outside the
+              # top-level page, including iframe/service-worker traffic.
+              context.on(
+                  "request",
+                  on_request
+              )
+
+              context.on(
+                  "response",
+                  on_response
+              )
+
+              page = context.new_page()
+
+              try:
+                  page.goto(
+                      VIDEO_URL,
+                      wait_until="domcontentloaded",
+                      timeout=60000,
+                  )
+              except Exception as exc:
+                  print(
+                      "Initial navigation warning:",
+                      exc
+                  )
+
+              print("")
+              print("Page title:")
+              try:
+                  print(page.title())
+              except Exception:
+                  pass
+
+              print("")
+              print("Waiting for player/network...")
+              page.wait_for_timeout(10000)
+
+
+              # ----------------------------------------------------
+              # Attempt cookie/consent buttons
+              # ----------------------------------------------------
+
+              consent_texts = [
+                  "Accept",
+                  "Accept all",
+                  "Accept All",
+                  "I agree",
+                  "Agree",
+                  "Allow all",
+                  "Tillad alle",
+                  "Accepter",
+                  "Accepter alle",
+              ]
+
+              for text in consent_texts:
+                  try:
+                      locator = page.get_by_text(
+                          text,
+                          exact=False
+                      ).first
+
+                      if locator.is_visible(
+                          timeout=1000
+                      ):
+                          print(
+                              "Clicking consent:",
+                              text
+                          )
+
+                          locator.click(
+                              timeout=3000
+                          )
+
+                          page.wait_for_timeout(
+                              2000
+                          )
+
+                          break
+
+                  except Exception:
+                      pass
+
+
+              # ----------------------------------------------------
+              # Try to start playback
+              # ----------------------------------------------------
+
+              print("")
+              print("Attempting playback...")
+
+              try:
+                  page.evaluate(
+                      """
+                      () => {
+                          const videos =
+                              Array.from(
+                                  document.querySelectorAll('video')
+                              );
+
+                          for (const video of videos) {
+                              video.muted = true;
+                              video.play().catch(() => {});
+                          }
+                      }
+                      """
+                  )
+              except Exception:
+                  pass
+
+
+              # Click centre of player/page as fallback.
+              try:
+                  page.mouse.click(
+                      960,
+                      540
+                  )
+              except Exception:
+                  pass
+
+              page.wait_for_timeout(
+                  12000
+              )
+
+
+              # ----------------------------------------------------
+              # Try playback inside every iframe
+              # ----------------------------------------------------
+
+              print("")
+              print(
+                  "Frames found:",
+                  len(page.frames)
+              )
+
+              for frame in page.frames:
+
+                  try:
+                      frame.evaluate(
+                          """
+                          () => {
+                              const videos =
+                                  Array.from(
+                                      document.querySelectorAll('video')
+                                  );
+
+                              for (const video of videos) {
+                                  video.muted = true;
+                                  video.play().catch(() => {});
+                              }
+                          }
+                          """
+                      )
+                  except Exception:
+                      pass
+
+
+              page.wait_for_timeout(
+                  15000
+              )
+
+
+              # ----------------------------------------------------
+              # Reload once with monitoring already active
+              # ----------------------------------------------------
+
+              print("")
+              print("Refreshing with monitoring active...")
+
+              try:
+                  page.reload(
+                      wait_until="domcontentloaded",
+                      timeout=60000,
+                  )
+              except Exception as exc:
+                  print(
+                      "Reload warning:",
+                      exc
+                  )
+
+              page.wait_for_timeout(
+                  20000
+              )
+
+
+              # Screenshot only for debugging.
+              try:
+                  page.screenshot(
+                      path="day3a-browser.png",
+                      full_page=False,
+                  )
+              except Exception:
+                  pass
+
+              browser.close()
+
+
+          # --------------------------------------------------------
+          # Save discovery results
+          # --------------------------------------------------------
+
+          sorted_candidates = sorted(
+              candidates.values(),
+              key=lambda x: x["score"],
+              reverse=True,
+          )
+
+          print("")
+          print("======================================")
+          print("ALL HLS CANDIDATES")
+          print("======================================")
+
+          if not sorted_candidates:
+              print("NO HLS CANDIDATES FOUND")
+          else:
+              for number, candidate in enumerate(
+                  sorted_candidates,
+                  start=1
+              ):
+                  print("")
+                  print(
+                      f"{number}. "
+                      f"score={candidate['score']} "
+                      f"source={candidate['source']}"
+                  )
+                  print(candidate["url"])
+
+
+          with open(
+              "day3a-browser-results.json",
+              "w",
+              encoding="utf-8",
+          ) as f:
+              json.dump(
+                  {
+                      "video_url": VIDEO_URL,
+                      "candidates": sorted_candidates,
+                      "responses": captured_responses,
+                  },
+                  f,
+                  indent=2,
+                  ensure_ascii=False,
+              )
+
+
+          # Save every candidate in simple text form for the next step.
+          with open(
+              "day3a-candidates.txt",
+              "w",
+              encoding="utf-8",
+          ) as f:
+
+              for candidate in sorted_candidates:
+                  f.write(
+                      candidate["url"] + "\n"
+                  )
+
+
+          if not sorted_candidates:
+              raise SystemExit(
+                  "ERROR: Browser did not discover any HLS URLs."
+              )
+
+
+          print("")
+          print("======================================")
+          print("BROWSER DISCOVERY COMPLETE")
+          print("======================================")
+
+          PY
+
+
+      # ============================================================
+      # 5. RUN CHROMIUM NETWORK CAPTURE
+      # ============================================================
+
+      - name: Capture Dailymotion HLS network traffic
+        env:
+          VIDEO_URL: ${{ steps.source.outputs.url }}
         run: |
           set -e
 
-          URL='https://vod3.cf.dmcdn.net/sec2(62G_XEy4nbkofQN0R9lDICYerhJJ8bE-txTSNwnDkAPB5F7jXBm_RmOurbEsnIioGkCxKj1FpijCX2zUnC3cRevMRF1m4CcrpKof-AGsFMehneeChcEJ6vp3wwD735jNiCw9_4MH9hNkep-bpJgWAVlItmu2MuesKLm5u_gWF3GLg0MbO-WmfP6yJE4iZhRw)/video/417/964/231469714_mp4_h264_aac_hd_6.m3u8'
+          python scan_dailymotion.py
 
-          HEADERS=$'Origin: https://geo.dailymotion.com\r\nReferer: https://geo.dailymotion.com/\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36\r\n'
 
-          echo "======================================"
-          echo "FFPROBE DIRECT 720P STREAM"
-          echo "======================================"
+      # ============================================================
+      # 6. PROBE EVERY DISCOVERED HLS URL
+      #
+      # This is crucial:
+      # we don't trust the filename alone.
+      # FFprobe verifies the REAL resolution.
+      # ============================================================
 
-          ffprobe \
-            -headers "$HEADERS" \
-            -v error \
-            -show_entries stream=index,codec_type,codec_name,width,height,r_frame_rate \
-            -show_entries format=duration \
-            -of default=noprint_wrappers=1 \
-            "$URL"
-
-      - name: Download 90 second sample
+      - name: Probe discovered streams and select highest resolution
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
-          URL='https://vod3.cf.dmcdn.net/sec2(62G_XEy4nbkofQN0R9lDICYerhJJ8bE-txTSNwnDkAPB5F7jXBm_RmOurbEsnIioGkCxKj1FpijCX2zUnC3cRevMRF1m4CcrpKof-AGsFMehneeChcEJ6vp3wwD735jNiCw9_4MH9hNkep-bpJgWAVlItmu2MuesKLm5u_gWF3GLg0MbO-WmfP6yJE4iZhRw)/video/417/964/231469714_mp4_h264_aac_hd_6.m3u8'
+          python - <<'PY'
+
+          import json
+          import os
+          import subprocess
+          import sys
+
+
+          with open(
+              "day3a-browser-results.json",
+              "r",
+              encoding="utf-8",
+          ) as f:
+              data = json.load(f)
+
+
+          candidates = data.get(
+              "candidates",
+              []
+          )
+
+
+          HEADERS = (
+              "Origin: https://geo.dailymotion.com\r\n"
+              "Referer: https://geo.dailymotion.com/\r\n"
+              "User-Agent: Mozilla/5.0 "
+              "(Windows NT 10.0; Win64; x64) "
+              "AppleWebKit/537.36 "
+              "Chrome/151 Safari/537.36\r\n"
+          )
+
+
+          results = []
+
+
+          print("")
+          print("======================================")
+          print("PROBING HLS CANDIDATES")
+          print("======================================")
+
+
+          for index, item in enumerate(
+              candidates,
+              start=1
+          ):
+
+              url = item["url"]
+
+              print("")
+              print(
+                  f"Testing candidate {index}/"
+                  f"{len(candidates)}"
+              )
+
+              # Avoid dumping full URL repeatedly if it contains a long
+              # temporary sec2 token.
+              print(
+                  "Candidate score:",
+                  item.get("score")
+              )
+
+              command = [
+                  "ffprobe",
+                  "-headers",
+                  HEADERS,
+                  "-v",
+                  "error",
+                  "-show_entries",
+                  "stream=codec_type,codec_name,width,height",
+                  "-of",
+                  "json",
+                  url,
+              ]
+
+              try:
+                  completed = subprocess.run(
+                      command,
+                      capture_output=True,
+                      text=True,
+                      timeout=30,
+                  )
+
+              except subprocess.TimeoutExpired:
+                  print("ffprobe timed out")
+                  continue
+
+
+              if completed.returncode != 0:
+                  print("ffprobe failed")
+                  print(
+                      completed.stderr[-1000:]
+                  )
+                  continue
+
+
+              try:
+                  probe = json.loads(
+                      completed.stdout
+                  )
+              except Exception:
+                  print(
+                      "Could not parse ffprobe output"
+                  )
+                  continue
+
+
+              heights = []
+
+              for stream in probe.get(
+                  "streams",
+                  []
+              ):
+                  if (
+                      stream.get("codec_type")
+                      == "video"
+                      and stream.get("height")
+                  ):
+                      heights.append(
+                          int(stream["height"])
+                      )
+
+
+              if not heights:
+                  print(
+                      "No video resolution found"
+                  )
+                  continue
+
+
+              height = max(heights)
+
+              print(
+                  f"REAL VIDEO HEIGHT: {height}p"
+              )
+
+
+              result = {
+                  **item,
+                  "height": height,
+                  "probe": probe,
+              }
+
+              results.append(
+                  result
+              )
+
+
+          if not results:
+              print("")
+              print(
+                  "ERROR: None of the HLS candidates "
+                  "could be verified."
+              )
+              sys.exit(1)
+
+
+          # Resolution wins first.
+          # Discovery score is secondary.
+          results.sort(
+              key=lambda x: (
+                  x["height"],
+                  x.get("score", 0),
+              ),
+              reverse=True,
+          )
+
+
+          winner = results[0]
+
+
+          print("")
+          print("======================================")
+          print("BEST VERIFIED STREAM")
+          print("======================================")
+          print(
+              "Resolution:",
+              f"{winner['height']}p"
+          )
+          print(
+              "Discovery score:",
+              winner.get("score")
+          )
+          print(
+              "Source:",
+              winner.get("source")
+          )
+          print("")
+          print("Selected URL:")
+          print(winner["url"])
+
+
+          if winner["height"] >= 720:
+              print("")
+              print(
+                  "SUCCESS: Browser automatically "
+                  "discovered 720p or higher."
+              )
+          else:
+              print("")
+              print(
+                  "WARNING: Browser discovery worked, "
+                  "but highest verified stream is only "
+                  f"{winner['height']}p."
+              )
+
+
+          with open(
+              "day3a-best-url.txt",
+              "w",
+              encoding="utf-8",
+          ) as f:
+              f.write(
+                  winner["url"]
+              )
+
+
+          with open(
+              "day3a-probe-results.json",
+              "w",
+              encoding="utf-8",
+          ) as f:
+              json.dump(
+                  results,
+                  f,
+                  indent=2,
+              )
+
+          PY
+
+
+      # ============================================================
+      # 7. DOWNLOAD 90-SECOND SAMPLE FROM AUTOMATICALLY SELECTED URL
+      # ============================================================
+
+      - name: Download automatic best-quality sample
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          URL=$(cat day3a-best-url.txt)
 
           HEADERS=$'Origin: https://geo.dailymotion.com\r\nReferer: https://geo.dailymotion.com/\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36\r\n'
 
+          echo ""
           echo "======================================"
-          echo "DOWNLOADING 90 SECOND 720P SAMPLE"
+          echo "DOWNLOADING 90 SECOND SAMPLE"
           echo "======================================"
 
           ffmpeg \
@@ -56,24 +962,47 @@ jobs:
             -map 0:v:0 \
             -map 0:a:0? \
             -c copy \
-            day3a-720-test.mp4
+            day3a-browser-best.mp4
 
-      - name: Verify downloaded sample
+
+      # ============================================================
+      # 8. VERIFY FINAL SAMPLE
+      # ============================================================
+
+      - name: Verify final sample quality
         run: |
+          set -e
+
+          echo ""
           echo "======================================"
-          echo "FINAL FILE QUALITY"
+          echo "FINAL SAMPLE QUALITY"
           echo "======================================"
 
           ffprobe \
             -v error \
-            -show_entries stream=index,codec_type,codec_name,width,height,r_frame_rate \
-            -show_entries format=duration,size,bit_rate \
+            -show_entries \
+            stream=index,codec_type,codec_name,width,height,r_frame_rate \
+            -show_entries \
+            format=duration,size,bit_rate \
             -of default=noprint_wrappers=1 \
-            day3a-720-test.mp4
+            day3a-browser-best.mp4
 
-      - name: Upload sample
+
+      # ============================================================
+      # 9. UPLOAD RESULTS
+      # ============================================================
+
+      - name: Upload browser-discovery test
         uses: actions/upload-artifact@v4
         with:
-          name: day3a-direct-720p-test
-          path: day3a-720-test.mp4
+          name: day3a-browser-720p-test
+
+          path: |
+            day3a-browser-best.mp4
+            day3a-browser.png
+            day3a-browser-results.json
+            day3a-probe-results.json
+            day3a-candidates.txt
+
           retention-days: 1
+          if-no-files-found: warn
