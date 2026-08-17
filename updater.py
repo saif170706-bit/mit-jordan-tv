@@ -1,40 +1,33 @@
-import html
 import json
 import logging
 import os
-import re
 import time
-import urllib.error
 import urllib.parse
 import urllib.request
 
 from selenium import webdriver
-from selenium.common.exceptions import TimeoutException
+from selenium.common.exceptions import (
+    JavascriptException,
+    TimeoutException,
+    WebDriverException,
+)
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 
 
-# ==========================================================
+# ============================================================
 # CONFIGURATION
-# ==========================================================
+# ============================================================
 
-ROYA_TV_PAGE = (
-    "https://roya.tv/live-stream/1"
-)
-
-ROYA_NEWS_PAGE = (
-    "https://roya.tv/live-stream/21"
-)
-
-ALMAMLAKA_PAGE = (
-    "https://www.almamlakatv.com/live-video"
-)
+ROYA_TV_PAGE = "https://roya.tv/live-stream/1"
+ROYA_NEWS_PAGE = "https://roya.tv/live-stream/21"
+ALMAMLAKA_PAGE = "https://www.almamlakatv.com/live-video"
 
 
-# ==========================================================
+# ============================================================
 # LOGGING
-# ==========================================================
+# ============================================================
 
 logging.basicConfig(
     level=logging.INFO,
@@ -46,12 +39,112 @@ logging.basicConfig(
 )
 
 
-# ==========================================================
-# CREATE CHROME
-# ==========================================================
+# ============================================================
+# URL HELPERS
+# ============================================================
+
+def deep_unquote(value):
+    """
+    Decode URL encoding a few times.
+
+    Some players put stream URLs inside encoded
+    parameters, so one urllib.parse.unquote()
+    is not always enough.
+    """
+
+    if not value:
+        return ""
+
+    result = value
+
+    for _ in range(4):
+        decoded = urllib.parse.unquote(
+            result
+        )
+
+        if decoded == result:
+            break
+
+        result = decoded
+
+    return result
+
+
+def safe_url_for_log(url):
+    """
+    Show enough information to identify a stream
+    without printing long temporary tokens.
+    """
+
+    if not url:
+        return "<none>"
+
+    try:
+        parsed = urllib.parse.urlsplit(
+            url
+        )
+
+        path_parts = [
+            part
+            for part in parsed.path.split("/")
+            if part
+        ]
+
+        if len(path_parts) > 2:
+            visible_path = (
+                "/.../"
+                + path_parts[-1]
+            )
+
+        elif path_parts:
+            visible_path = (
+                "/"
+                + "/".join(path_parts)
+            )
+
+        else:
+            visible_path = "/"
+
+        result = (
+            f"{parsed.scheme}://"
+            f"{parsed.netloc}"
+            f"{visible_path}"
+        )
+
+        if parsed.query:
+            result += "?<token-hidden>"
+
+        return result
+
+    except Exception:
+        return "<stream-url-hidden>"
+
+
+# ============================================================
+# CHROME
+# ============================================================
 
 def create_driver():
+    chrome_binary = os.environ.get(
+        "CHROME_BINARY",
+        "",
+    ).strip()
+
+    chromedriver_path = os.environ.get(
+        "CHROMEDRIVER_PATH",
+        "",
+    ).strip()
+
     options = Options()
+
+    if chrome_binary:
+        options.binary_location = (
+            chrome_binary
+        )
+
+    # --------------------------------------------------------
+    # GitHub Actions / headless Chrome
+    # --------------------------------------------------------
 
     options.add_argument(
         "--headless=new"
@@ -74,32 +167,24 @@ def create_driver():
     )
 
     options.add_argument(
-        "--autoplay-policy="
-        "no-user-gesture-required"
+        "--disable-notifications"
     )
 
     options.add_argument(
-        "--mute-audio"
+        "--disable-popup-blocking"
     )
 
+    # Important for video players.
+    options.add_argument(
+        "--autoplay-policy=no-user-gesture-required"
+    )
+
+    # Enable Chrome DevTools performance/network logging.
     options.set_capability(
         "goog:loggingPrefs",
         {
-            "performance": "ALL"
+            "performance": "ALL",
         },
-    )
-
-    chrome_binary = os.environ.get(
-        "CHROME_BINARY"
-    )
-
-    if chrome_binary:
-        options.binary_location = (
-            chrome_binary
-        )
-
-    chromedriver_path = os.environ.get(
-        "CHROMEDRIVER_PATH"
     )
 
     if chromedriver_path:
@@ -115,9 +200,10 @@ def create_driver():
     )
 
     driver.set_page_load_timeout(
-        60
+        45
     )
 
+    # Explicitly enable Network domain.
     try:
         driver.execute_cdp_cmd(
             "Network.enable",
@@ -129,437 +215,174 @@ def create_driver():
     return driver
 
 
-# ==========================================================
-# URL HELPERS
-# ==========================================================
+# ============================================================
+# NETWORK CAPTURE
+# ============================================================
 
-def deep_unquote(value):
-    value = html.unescape(
-        value
-    )
-
-    for _ in range(4):
-        decoded = urllib.parse.unquote(
-            value
-        )
-
-        if decoded == value:
-            break
-
-        value = decoded
-
-    return value
-
-
-def safe_url_for_log(url):
+def read_network_entries(driver):
     """
-    Hide tokens from public GitHub logs.
+    Read Chrome's REAL network traffic.
+
+    This is the important part.
+
+    It captures requests from:
+    - the main page
+    - iframes
+    - Brightcove
+    - video players
+    - JavaScript/fetch/XHR
+
+    Each call drains the current performance log.
     """
 
-    try:
-        parsed = urllib.parse.urlsplit(
-            url
-        )
-
-        filename = (
-            parsed.path
-            .rstrip("/")
-            .split("/")[-1]
-        )
-
-        if not filename:
-            filename = "stream"
-
-        return (
-            f"{parsed.scheme}://"
-            f"{parsed.hostname}"
-            f"/.../{filename}"
-            + (
-                "?<token-hidden>"
-                if parsed.query
-                else ""
-            )
-        )
-
-    except Exception:
-        return "<hidden URL>"
-
-
-# ==========================================================
-# PERFORMANCE NETWORK LOG
-# ==========================================================
-
-def read_network_urls(driver):
-    urls = []
+    entries = []
 
     try:
         logs = driver.get_log(
             "performance"
         )
-    except Exception:
-        return urls
 
-    for entry in logs:
+    except Exception:
+        return entries
+
+    for log_entry in logs:
+
         try:
-            message = json.loads(
-                entry["message"]
-            )["message"]
+            outer = json.loads(
+                log_entry["message"]
+            )
+
+            message = outer[
+                "message"
+            ]
+
         except Exception:
             continue
 
         method = message.get(
             "method",
-            ""
+            "",
         )
 
-        url = ""
+        params = message.get(
+            "params",
+            {},
+        )
+
+
+        # ====================================================
+        # REQUEST
+        # ====================================================
 
         if (
             method
             == "Network.requestWillBeSent"
         ):
-            url = (
-                message
-                .get("params", {})
-                .get("request", {})
-                .get("url", "")
+
+            request = params.get(
+                "request",
+                {},
             )
+
+            url = request.get(
+                "url",
+                "",
+            )
+
+            if url:
+                entries.append(
+                    {
+                        "url": url,
+                        "kind": "request",
+                        "status": None,
+                        "mime_type": "",
+                    }
+                )
+
+
+        # ====================================================
+        # RESPONSE
+        # ====================================================
 
         elif (
             method
             == "Network.responseReceived"
         ):
-            url = (
-                message
-                .get("params", {})
-                .get("response", {})
-                .get("url", "")
+
+            response = params.get(
+                "response",
+                {},
             )
 
-        if url:
-            urls.append(url)
-
-    return urls
-
-def read_network_responses(driver):
-    """
-    Read Chrome network responses.
-
-    Unlike read_network_urls(), this also gives us:
-    - HTTP status
-    - MIME/content type
-    - request ID
-
-    Used by the dynamic Al Mamlaka scanner.
-    """
-
-    responses = []
-
-    try:
-        logs = driver.get_log(
-            "performance"
-        )
-    except Exception:
-        return responses
-
-    for entry in logs:
-        try:
-            message = json.loads(
-                entry["message"]
-            )["message"]
-        except Exception:
-            continue
-
-        if (
-            message.get("method")
-            != "Network.responseReceived"
-        ):
-            continue
-
-        params = message.get(
-            "params",
-            {}
-        )
-
-        response = params.get(
-            "response",
-            {}
-        )
-
-        url = response.get(
-            "url",
-            ""
-        )
-
-        if not url:
-            continue
-
-        responses.append(
-            {
-                "url": url,
-
-                "status": response.get(
-                    "status",
-                    0
-                ),
-
-                "mime_type": response.get(
-                    "mimeType",
-                    ""
-                ),
-
-                "headers": response.get(
-                    "headers",
-                    {}
-                ),
-
-                "request_id": params.get(
-                    "requestId",
-                    ""
-                ),
-            }
-        )
-
-    return responses
-
-def looks_like_possible_manifest(
-    url,
-    mime_type="",
-):
-    """
-    Very broad first filter.
-
-    IMPORTANT:
-    We are NOT requiring any particular
-    CDN, filename or URL structure.
-
-    Current Brightcove characteristics
-    are only clues.
-    """
-
-    lower_url = (
-        url.lower()
-    )
-
-    lower_mime = (
-        mime_type.lower()
-    )
-
-    mime_clues = [
-        "mpegurl",
-        "m3u",
-        "dash+xml",
-    ]
-
-    url_clues = [
-        ".m3u8",
-        ".mpd",
-        "playlist",
-        "manifest",
-        "master",
-        "hls",
-    ]
-
-    if any(
-        clue in lower_mime
-        for clue in mime_clues
-    ):
-        return True
-
-    if any(
-        clue in lower_url
-        for clue in url_clues
-    ):
-        return True
-
-    return False
-
-
-def validate_manifest_standalone(
-    url,
-):
-    """
-    Test the discovered URL independently.
-
-    This is deliberately NOT using:
-    - browser cookies
-    - Al Mamlaka cookies
-    - Origin header
-    - Referer header
-    - Selenium session
-
-    Therefore a URL is accepted only if it
-    behaves like something OwnTV/VLC can
-    request independently.
-
-    Returns:
-        dict if valid
-        None if invalid
-    """
-
-    try:
-        request = urllib.request.Request(
-            url,
-            method="GET",
-            headers={
-                "User-Agent":
-                    "Mozilla/5.0",
-
-                "Accept":
-                    (
-                        "application/vnd.apple.mpegurl,"
-                        "application/x-mpegURL,"
-                        "application/dash+xml,"
-                        "*/*"
-                    ),
-            },
-        )
-
-        with urllib.request.urlopen(
-            request,
-            timeout=15,
-        ) as response:
-
-            status = (
-                response.status
+            url = response.get(
+                "url",
+                "",
             )
 
-            final_url = (
-                response.geturl()
-            )
+            if url:
+                entries.append(
+                    {
+                        "url": url,
+                        "kind": "response",
 
-            content_type = (
-                response.headers.get(
-                    "Content-Type",
-                    ""
+                        "status":
+                            response.get(
+                                "status"
+                            ),
+
+                        "mime_type":
+                            response.get(
+                                "mimeType",
+                                "",
+                            ),
+                    }
                 )
-                .lower()
-            )
 
-            # We only need the beginning of
-            # the manifest for identification.
-            raw = response.read(
-                256 * 1024
-            )
-
-    except Exception:
-        return None
-
-    if not (
-        200 <= status < 300
-    ):
-        return None
-
-    try:
-        text = raw.decode(
-            "utf-8",
-            errors="replace",
-        )
-
-    except Exception:
-        return None
-
-    stripped = text.lstrip()
-
-    # ==========================================
-    # HLS
-    # ==========================================
-
-    if stripped.startswith(
-        "#EXTM3U"
-    ):
-        upper = stripped.upper()
-
-        is_master = (
-            "#EXT-X-STREAM-INF"
-            in upper
-            or
-            "#EXT-X-MEDIA:"
-            in upper
-        )
-
-        is_media = (
-            "#EXTINF:"
-            in upper
-            or
-            "#EXT-X-TARGETDURATION:"
-            in upper
-        )
-
-        is_finished = (
-            "#EXT-X-ENDLIST"
-            in upper
-        )
-
-        return {
-            "url": final_url,
-            "protocol": "hls",
-            "content_type":
-                content_type,
-
-            "is_master":
-                is_master,
-
-            "is_media":
-                is_media,
-
-            "is_live":
-                not is_finished,
-        }
+    return entries
 
 
-    # ==========================================
-    # DASH
-    # ==========================================
+def read_network_urls(driver):
+    """
+    Compatibility helper used by the Roya scanner.
+    """
 
-    # We don't expect this today, but this makes
-    # discovery less dependent on today's HLS
-    # implementation.
+    return [
+        item["url"]
+        for item
+        in read_network_entries(driver)
+        if item.get("url")
+    ]
 
-    first_part = (
-        stripped[:5000]
-        .lower()
-    )
 
-    if (
-        "<mpd"
-        in first_part
-    ):
-        return {
-            "url": final_url,
-            "protocol": "dash",
-            "content_type":
-                content_type,
-
-            "is_master": True,
-            "is_media": False,
-            "is_live": (
-                'type="dynamic"'
-                in first_part
-            ),
-        }
-
-    return None
-
-# ==========================================================
-# JAVASCRIPT RESOURCE LIST
-# ==========================================================
+# ============================================================
+# RESOURCE URLS
+# ============================================================
 
 def get_resource_urls(driver):
+    """
+    Secondary source of URLs from browser Performance API.
+    """
+
     try:
-        resources = driver.execute_script(
+        urls = driver.execute_script(
             """
             return performance
                 .getEntriesByType('resource')
-                .map(x => x.name);
+                .map(function(x) {
+                    return x.name;
+                });
             """
         )
 
         if isinstance(
-            resources,
+            urls,
             list,
         ):
-            return resources
+            return [
+                str(x)
+                for x in urls
+                if x
+            ]
 
     except Exception:
         pass
@@ -567,103 +390,41 @@ def get_resource_urls(driver):
     return []
 
 
-# ==========================================================
-# FIND URLS INSIDE PAGE SOURCE
-# ==========================================================
+# ============================================================
+# PLAY BUTTON / PLAYER CONTROL
+# ============================================================
 
-def urls_from_page_source(driver):
-    try:
-        source = (
-            driver.page_source
-            .replace("\\/", "/")
-        )
-    except Exception:
-        return []
-
-    matches = re.findall(
-        r'https?://[^\s"\'<>\\]+',
-        source,
-        flags=re.IGNORECASE,
-    )
-
-    return [
-        html.unescape(
-            match.rstrip(
-                ")]},;"
-            )
-        )
-        for match in matches
-    ]
+PLAY_SELECTORS = [
+    "button.vjs-big-play-button",
+    ".vjs-big-play-button",
+    "button.vjs-play-control",
+    ".vjs-play-control",
+    "button[aria-label='Play']",
+    "button[title='Play']",
+    ".play-button",
+    ".playButton",
+]
 
 
-# ==========================================================
-# TRY TO START VIDEO
-# ==========================================================
+def click_player_in_current_frame(
+    driver,
+):
+    """
+    Try several ways of actually starting the
+    video in the currently selected document/frame.
 
-def play_current_context(driver):
-    try:
-        driver.execute_script(
-            """
-            document
-                .querySelectorAll('video')
-                .forEach(v => {
-                    try {
-                        v.muted = true;
-                        v.autoplay = true;
+    Returns number of playback actions attempted.
+    """
 
-                        const result =
-                            v.play();
-
-                        if (
-                            result &&
-                            result.catch
-                        ) {
-                            result.catch(
-                                () => {}
-                            );
-                        }
-
-                    } catch (e) {}
-                });
+    actions = 0
 
 
-            try {
-                if (
-                    window.videojs &&
-                    typeof window.videojs
-                        .getPlayers
-                        === 'function'
-                ) {
-                    const players =
-                        window.videojs
-                            .getPlayers();
+    # --------------------------------------------------------
+    # 1. Click known play buttons
+    # --------------------------------------------------------
 
-                    Object
-                        .values(players)
-                        .forEach(p => {
-                            try {
-                                p.muted(true);
-                                p.play();
-                            } catch (e) {}
-                        });
-                }
-            } catch (e) {}
-            """
-        )
+    for selector in PLAY_SELECTORS:
 
-    except Exception:
-        pass
-
-    selectors = [
-        ".vjs-big-play-button",
-        ".vjs-play-control",
-        ".jw-icon-playback",
-        ".plyr__control--overlaid",
-        '[aria-label="Play"]',
-        '[aria-label="play"]',
-    ]
-
-    for selector in selectors:
         try:
             elements = (
                 driver.find_elements(
@@ -672,60 +433,179 @@ def play_current_context(driver):
                 )
             )
 
-            for element in elements[:5]:
-                try:
-                    driver.execute_script(
-                        "arguments[0].click();",
-                        element,
-                    )
-                except Exception:
-                    pass
-
         except Exception:
-            pass
+            continue
+
+        for element in elements:
+
+            try:
+                if not element.is_displayed():
+                    continue
+
+                driver.execute_script(
+                    """
+                    arguments[0].click();
+                    """,
+                    element,
+                )
+
+                actions += 1
+
+                logging.info(
+                    "Player: clicked %s",
+                    selector,
+                )
+
+            except Exception:
+                continue
 
 
-def try_start_playback(
-    driver,
-):
-    """
-    Start video in main page and
-    top-level iframes.
-    """
+    # --------------------------------------------------------
+    # 2. Directly tell HTML5 video elements to play
+    # --------------------------------------------------------
 
     try:
-        driver.switch_to.default_content()
+        result = driver.execute_script(
+            """
+            const videos =
+                Array.from(
+                    document.querySelectorAll(
+                        'video'
+                    )
+                );
+
+            let attempted = 0;
+
+            for (const video of videos) {
+
+                try {
+                    video.muted = true;
+
+                    const result =
+                        video.play();
+
+                    if (
+                        result &&
+                        typeof result.catch
+                        === 'function'
+                    ) {
+                        result.catch(
+                            function() {}
+                        );
+                    }
+
+                    attempted++;
+                }
+                catch (e) {
+                }
+            }
+
+            return attempted;
+            """
+        )
+
+        if result:
+            actions += int(
+                result
+            )
+
+            logging.info(
+                "Player: play() called "
+                "on %s video element(s).",
+                result,
+            )
+
     except Exception:
         pass
 
-    play_current_context(
-        driver
-    )
+
+    # --------------------------------------------------------
+    # 3. Click the visible video/player area
+    #
+    # Useful if a player has an overlay rather than
+    # a normal <button>.
+    # --------------------------------------------------------
 
     try:
-        driver.switch_to.default_content()
-
-        frames = driver.find_elements(
-            By.TAG_NAME,
-            "iframe",
+        players = driver.find_elements(
+            By.CSS_SELECTOR,
+            (
+                "video, "
+                ".video-js, "
+                ".vjs-tech"
+            ),
         )
 
-        frame_count = len(
-            frames
-        )
+        for player in players:
+
+            try:
+                if not player.is_displayed():
+                    continue
+
+                driver.execute_script(
+                    """
+                    arguments[0].click();
+                    """,
+                    player,
+                )
+
+                actions += 1
+
+            except Exception:
+                pass
 
     except Exception:
-        frame_count = 0
+        pass
+
+    return actions
+
+
+def play_in_frames_recursive(
+    driver,
+    depth=0,
+    max_depth=3,
+):
+    """
+    Search for the player both on the main page and
+    inside iframes.
+
+    This is especially important for Al Mamlaka because
+    its video player is embedded in Brightcove.
+    """
+
+    actions = 0
+
+    actions += (
+        click_player_in_current_frame(
+            driver
+        )
+    )
+
+    if depth >= max_depth:
+        return actions
+
+    try:
+        frame_count = len(
+            driver.find_elements(
+                By.TAG_NAME,
+                "iframe",
+            )
+        )
+    except Exception:
+        return actions
 
     for index in range(
         frame_count
     ):
-        try:
-            driver.switch_to.default_content()
 
-            frames = driver.find_elements(
-                By.TAG_NAME,
-                "iframe",
+        try:
+            # Find the frames again because the page/player
+            # can alter the DOM while playback starts.
+            frames = (
+                driver.find_elements(
+                    By.TAG_NAME,
+                    "iframe",
+                )
             )
 
             if index >= len(frames):
@@ -735,27 +615,102 @@ def try_start_playback(
                 frames[index]
             )
 
-            play_current_context(
-                driver
+            actions += (
+                play_in_frames_recursive(
+                    driver,
+                    depth=depth + 1,
+                    max_depth=max_depth,
+                )
             )
 
+            driver.switch_to.parent_frame()
+
         except Exception:
-            pass
+
+            try:
+                driver.switch_to.default_content()
+            except Exception:
+                pass
+
+            # We intentionally continue.
+            continue
+
+    return actions
+
+
+def try_start_playback(driver):
+    """
+    Start playback wherever the player is located.
+
+    For Roya this is harmless.
+    For Al Mamlaka this is crucial because the
+    correct HLS request appears when the actual
+    Brightcove player starts.
+    """
 
     try:
         driver.switch_to.default_content()
     except Exception:
         pass
 
+    try:
+        iframe_count = len(
+            driver.find_elements(
+                By.TAG_NAME,
+                "iframe",
+            )
+        )
 
-# ==========================================================
-# ROYA SCORING
-# ==========================================================
+        logging.info(
+            "Player: page currently "
+            "contains %d iframe(s).",
+            iframe_count,
+        )
+
+    except Exception:
+        pass
+
+    actions = 0
+
+    try:
+        actions = (
+            play_in_frames_recursive(
+                driver,
+                depth=0,
+                max_depth=3,
+            )
+        )
+    except Exception:
+        pass
+
+    try:
+        driver.switch_to.default_content()
+    except Exception:
+        pass
+
+    logging.info(
+        "Player: playback actions attempted: %d",
+        actions,
+    )
+
+    return actions
+
+
+# ============================================================
+# ROYA
+# ============================================================
 
 def score_roya(
     url,
     want_news=False,
 ):
+    """
+    Existing Roya logic.
+
+    We keep this strict because the current Roya system
+    already works correctly.
+    """
+
     decoded = deep_unquote(
         url
     )
@@ -765,15 +720,10 @@ def score_roya(
     if ".m3u8" not in lower:
         return -1
 
-    if (
-        "kwikmotion.com"
-        not in lower
-    ):
+    if "kwikmotion.com" not in lower:
         return -1
 
-    # IMPORTANT:
-    # Do NOT save the child chunks
-    # playlist we tested.
+    # Do not select an individual child/media playlist.
     if "chunks.m3u8" in lower:
         return -1
 
@@ -791,87 +741,35 @@ def score_roya(
     ):
         score += 120
 
-    if "hdnts=" in lower:
+    if (
+        "hdnts="
+        in lower
+    ):
         score += 80
 
     if "roya" in lower:
         score += 20
 
     if want_news:
+
         if "news" in lower:
             score += 60
 
     else:
+
         if "news" in lower:
             score -= 100
+
         else:
             score += 20
 
     return score
 
 
-# ==========================================================
-# AL MAMLAKA HELPERS
-# ==========================================================
-
-def expand_mamlaka_url(
-    url,
-):
-    """
-    Brightcove sometimes reports the
-    real HLS URL inside metrics URLs as
-    media_url=...
-    """
-
-    results = []
-
-    try:
-        parsed = urllib.parse.urlsplit(
-            url
-        )
-
-        query = urllib.parse.parse_qs(
-            parsed.query
-        )
-
-        for key in [
-            "media_url",
-            "mediaUrl",
-        ]:
-            for value in query.get(
-                key,
-                [],
-            ):
-                value = deep_unquote(
-                    value
-                )
-
-                if value.startswith(
-                    (
-                        "https://",
-                        "http://",
-                    )
-                ):
-                    results.append(
-                        value
-                    )
-
-    except Exception:
-        pass
-
-    return results
-
-# ==========================================================
-# GENERIC PAGE SCANNER
-# ==========================================================
-
-def scan_stream(
-    page_url,
-    channel_name,
-    scorer,
-    timeout_seconds=70,
-    early_score=300,
-    expander=None,
+def scan_roya(
+    name,
+    page,
+    want_news=False,
 ):
     logging.info(
         "===================================="
@@ -879,12 +777,12 @@ def scan_stream(
 
     logging.info(
         "Scanning %s",
-        channel_name,
+        name,
     )
 
     logging.info(
         "Page: %s",
-        page_url,
+        page,
     )
 
     driver = create_driver()
@@ -895,199 +793,339 @@ def scan_stream(
     seen = set()
 
     try:
+
         try:
             driver.get(
-                page_url
+                page
             )
 
         except TimeoutException:
             logging.warning(
-                "%s page load timed out, "
-                "continuing anyway.",
-                channel_name,
+                "%s: page load timed out; "
+                "continuing.",
+                name,
             )
 
-        time.sleep(5)
+        # Let Roya's player initialize.
+        time.sleep(7)
 
-        for second in range(
-            timeout_seconds
+        started = time.time()
+
+        while (
+            time.time()
+            - started
+            < 30
         ):
-            if (
-                second % 5 == 0
-            ):
-                try_start_playback(
-                    driver
-                )
 
             candidates = []
 
+            # REAL Chrome network.
             candidates.extend(
                 read_network_urls(
                     driver
                 )
             )
 
-            if (
-                second % 5 == 0
-            ):
-                candidates.extend(
-                    get_resource_urls(
-                        driver
-                    )
+            # Secondary browser resource list.
+            candidates.extend(
+                get_resource_urls(
+                    driver
                 )
-
-            if (
-                second % 10 == 0
-            ):
-                candidates.extend(
-                    urls_from_page_source(
-                        driver
-                    )
-                )
-
-            expanded = []
+            )
 
             for candidate in candidates:
-                if (
-                    candidate
-                    in seen
-                ):
+
+                if not candidate:
+                    continue
+
+                decoded = (
+                    deep_unquote(
+                        candidate
+                    )
+                )
+
+                if decoded in seen:
                     continue
 
                 seen.add(
-                    candidate
+                    decoded
                 )
 
-                expanded.append(
-                    candidate
+                score = score_roya(
+                    decoded,
+                    want_news=want_news,
                 )
 
-                if expander:
-                    for extra in expander(
-                        candidate
-                    ):
-                        expanded.append(
-                            extra
-                        )
-
-            for candidate in expanded:
-                try:
-                    score = scorer(
-                        candidate
-                    )
-                except Exception:
+                if score < 0:
                     continue
 
                 if (
                     score
                     > best_score
                 ):
-                    best_score = (
-                        score
+
+                    best_score = score
+                    best_url = decoded
+
+                    logging.info(
+                        "%s candidate found: "
+                        "%s (score=%d)",
+                        name,
+                        safe_url_for_log(
+                            decoded
+                        ),
+                        score,
                     )
 
-                    best_url = (
-                        candidate
-                    )
-
-                    if score >= 0:
-                        logging.info(
-                            "%s candidate found: "
-                            "%s "
-                            "(score=%d)",
-                            channel_name,
-                            safe_url_for_log(
-                                candidate
-                            ),
-                            score,
-                        )
+            # Usually not needed for Roya, but can help
+            # if the site waits for playback.
+            if (
+                time.time()
+                - started
+                > 8
+                and
+                best_url is None
+            ):
+                try_start_playback(
+                    driver
+                )
 
             if (
-                second >= 10
-                and
                 best_url
                 and
-                best_score
-                >= early_score
+                best_score >= 400
             ):
                 break
 
             time.sleep(1)
 
-    finally:
-        driver.quit()
+        if best_url:
 
-    if (
-        best_url is None
-        or
-        best_score < 0
-    ):
+            logging.info(
+                "%s: selected %s",
+                name,
+                safe_url_for_log(
+                    best_url
+                ),
+            )
+
+            return best_url
+
         logging.error(
             "%s: no usable stream found.",
-            channel_name,
+            name,
         )
 
         return None
 
-    logging.info(
-        "%s: selected %s",
-        channel_name,
-        safe_url_for_log(
-            best_url
-        ),
-    )
+    finally:
 
-    return best_url
+        try:
+            driver.quit()
+        except Exception:
+            pass
 
 
-# ==========================================================
-# ROYA TV
-# ==========================================================
-
-def scan_roya_tv():
-    return scan_stream(
-        page_url=ROYA_TV_PAGE,
-
-        channel_name="Roya TV",
-
-        scorer=lambda url:
-            score_roya(
-                url,
-                want_news=False,
-            ),
-
-        timeout_seconds=70,
-
-        early_score=300,
-    )
-
-
-# ==========================================================
-# ROYA NEWS
-# ==========================================================
-
-def scan_roya_news():
-    return scan_stream(
-        page_url=ROYA_NEWS_PAGE,
-
-        channel_name="Roya News",
-
-        scorer=lambda url:
-            score_roya(
-                url,
-                want_news=True,
-            ),
-
-        timeout_seconds=70,
-
-        early_score=300,
-    )
-
-
-# ==========================================================
+# ============================================================
 # AL MAMLAKA
-# ==========================================================
+# ============================================================
+
+def looks_like_hls(
+    url,
+    mime_type="",
+):
+    """
+    Broad HLS recognition.
+
+    Important:
+    NO Brightcove domain is required.
+    NO playlist-hls-dvr filename is required.
+    """
+
+    if not url:
+        return False
+
+    lower_url = (
+        deep_unquote(
+            url
+        )
+        .lower()
+    )
+
+    lower_mime = (
+        mime_type
+        or ""
+    ).lower()
+
+    if ".m3u8" in lower_url:
+        return True
+
+    if "mpegurl" in lower_mime:
+        return True
+
+    if "application/x-mpegurl" in lower_mime:
+        return True
+
+    if (
+        "application/"
+        "vnd.apple.mpegurl"
+        in lower_mime
+    ):
+        return True
+
+    return False
+
+
+def score_mamlaka(
+    url,
+    mime_type="",
+    status=None,
+    kind="request",
+):
+    """
+    Score an ACTUAL HLS URL seen while the
+    official Al Mamlaka player is running.
+
+    Current known Al Mamlaka characteristics get
+    strong bonuses, but are NOT requirements.
+    """
+
+    decoded = deep_unquote(
+        url
+    )
+
+    lower = decoded.lower()
+
+    if not looks_like_hls(
+        decoded,
+        mime_type,
+    ):
+        return -1
+
+    score = 100
+
+
+    # --------------------------------------------------------
+    # We prefer URLs actually returned successfully
+    # by the server.
+    # --------------------------------------------------------
+
+    if kind == "response":
+        score += 150
+
+    try:
+        numeric_status = int(
+            status
+        )
+
+        if (
+            200
+            <= numeric_status
+            < 300
+        ):
+            score += 200
+
+    except Exception:
+        pass
+
+
+    # --------------------------------------------------------
+    # Generic HLS/master clues
+    # --------------------------------------------------------
+
+    if ".m3u8" in lower:
+        score += 100
+
+    if "playlist" in lower:
+        score += 100
+
+    if "master" in lower:
+        score += 150
+
+    if "hls" in lower:
+        score += 70
+
+    if "dvr" in lower:
+        score += 100
+
+
+    # --------------------------------------------------------
+    # Avoid choosing an individual video rendition if
+    # a real master playlist is present.
+    # --------------------------------------------------------
+
+    child_clues = [
+        "chunks.m3u8",
+        "chunklist",
+        "media_",
+        "segment",
+    ]
+
+    if any(
+        clue in lower
+        for clue in child_clues
+    ):
+        score -= 250
+
+
+    # --------------------------------------------------------
+    # Current CORRECT Al Mamlaka stream characteristics.
+    #
+    # These are BONUSES ONLY.
+    #
+    # Tomorrow the domain/path may change and the scanner
+    # can still accept another HLS master.
+    # --------------------------------------------------------
+
+    if (
+        "fastly.live.brightcove.com"
+        in lower
+    ):
+        score += 500
+
+    if (
+        "playlist-hls-dvr.m3u8"
+        in lower
+    ):
+        score += 1000
+
+    elif (
+        "playlist-hls"
+        in lower
+    ):
+        score += 500
+
+
+    # MIME type is useful even if the URL naming
+    # convention changes entirely.
+
+    lower_mime = (
+        mime_type
+        or ""
+    ).lower()
+
+    if "mpegurl" in lower_mime:
+        score += 200
+
+    return score
+
+
 def scan_almamlaka():
+    """
+    Reproduce the manual Al Mamlaka procedure:
+
+        1. Open official live page.
+        2. Start monitoring network traffic.
+        3. Locate/player including iframe.
+        4. PRESS PLAY.
+        5. Keep monitoring network traffic.
+        6. Capture the HLS request generated by playback.
+        7. Choose the best actual master manifest.
+
+    We DO NOT scrape a hard-coded stream URL from HTML.
+    We DO NOT maintain a fallback stream URL.
+    """
+
     logging.info(
         "===================================="
     )
@@ -1103,16 +1141,18 @@ def scan_almamlaka():
 
     driver = create_driver()
 
-    validated_urls = set()
-
     best_url = None
     best_score = -1
 
+    seen = set()
+
+    first_good_candidate_time = None
+
     try:
 
-        # ==================================================
-        # 1. OPEN THE REAL AL MAMLAKA LIVE PAGE
-        # ==================================================
+        # ====================================================
+        # 1. OPEN OFFICIAL LIVE PAGE
+        # ====================================================
 
         try:
             driver.get(
@@ -1121,59 +1161,140 @@ def scan_almamlaka():
 
         except TimeoutException:
             logging.warning(
-                "Al Mamlaka page load timed out. "
-                "Continuing."
+                "Al Mamlaka: page load "
+                "timed out; continuing."
             )
 
         logging.info(
-            "Al Mamlaka page opened."
+            "Al Mamlaka: official "
+            "live page opened."
         )
+
+
+        # ====================================================
+        # 2. GIVE PAGE + BRIGHTCOVE TIME TO LOAD
+        # ====================================================
 
         time.sleep(7)
 
 
-        # ==================================================
-        # 2. CLEAR OLD NETWORK LOG
+        # ====================================================
+        # 3. READ NETWORK THAT ALREADY HAPPENED
         #
-        # We want primarily the traffic generated around
-        # playback rather than page-loading advertisements.
-        # ==================================================
+        # Do NOT throw it away.
+        #
+        # If the player happened to request the manifest
+        # automatically, we want to keep it.
+        # ====================================================
 
-        try:
-            driver.get_log(
-                "performance"
+        initial_entries = (
+            read_network_entries(
+                driver
             )
-
-        except Exception:
-            pass
-
-
-        # ==================================================
-        # 3. START PLAYBACK
-        # ==================================================
+        )
 
         logging.info(
-            "Attempting to start "
-            "Al Mamlaka player..."
+            "Al Mamlaka: captured %d "
+            "initial network event(s).",
+            len(initial_entries),
+        )
+
+
+        # ====================================================
+        # 4. PROCESS INITIAL HLS REQUESTS
+        # ====================================================
+
+        for entry in initial_entries:
+
+            url = entry.get(
+                "url",
+                "",
+            )
+
+            mime_type = entry.get(
+                "mime_type",
+                "",
+            )
+
+            if not looks_like_hls(
+                url,
+                mime_type,
+            ):
+                continue
+
+            decoded = deep_unquote(
+                url
+            )
+
+            identity = (
+                entry.get(
+                    "kind"
+                ),
+                decoded,
+            )
+
+            if identity in seen:
+                continue
+
+            seen.add(
+                identity
+            )
+
+            score = score_mamlaka(
+                decoded,
+                mime_type=mime_type,
+                status=entry.get(
+                    "status"
+                ),
+                kind=entry.get(
+                    "kind",
+                    "request",
+                ),
+            )
+
+            if score < 0:
+                continue
+
+            logging.info(
+                "Al Mamlaka HLS seen "
+                "before Play: %s "
+                "(score=%d)",
+                safe_url_for_log(
+                    decoded
+                ),
+                score,
+            )
+
+            if score > best_score:
+                best_score = score
+                best_url = decoded
+
+
+        # ====================================================
+        # 5. NOW DO WHAT YOU DO MANUALLY:
+        #    PRESS PLAY ON THE ACTUAL PLAYER
+        # ====================================================
+
+        logging.info(
+            "Al Mamlaka: now attempting "
+            "to PRESS PLAY on the "
+            "actual player."
         )
 
         try_start_playback(
             driver
         )
 
-        time.sleep(2)
 
-
-        # ==================================================
-        # 4. WATCH ACTUAL NETWORK TRAFFIC
-        #
-        # We repeatedly press Play because Brightcove/player
-        # initialization may take several seconds.
-        # ==================================================
+        # ====================================================
+        # 6. WATCH NETWORK TRAFFIC AFTER PLAY
+        # ====================================================
 
         start_time = time.time()
 
-        timeout_seconds = 120
+        timeout_seconds = 100
+
+        last_play_attempt = 0
 
 
         while (
@@ -1182,161 +1303,129 @@ def scan_almamlaka():
             < timeout_seconds
         ):
 
-            elapsed = int(
+            elapsed = (
                 time.time()
                 - start_time
             )
 
 
-            # ----------------------------------------------
-            # Keep nudging the real player
-            # ----------------------------------------------
+            # ------------------------------------------------
+            # If playback has not started properly,
+            # repeatedly press Play.
+            #
+            # This matters in headless GitHub Chrome.
+            # ------------------------------------------------
 
             if (
-                elapsed % 4 == 0
+                elapsed
+                - last_play_attempt
+                >= 5
             ):
+
+                logging.info(
+                    "Al Mamlaka: nudging "
+                    "player Play button..."
+                )
+
                 try_start_playback(
                     driver
                 )
 
+                last_play_attempt = (
+                    elapsed
+                )
 
-            # ----------------------------------------------
-            # Read actual NETWORK RESPONSES
-            # ----------------------------------------------
 
-            responses = (
-                read_network_responses(
+            # ------------------------------------------------
+            # THIS IS THE IMPORTANT NETWORK TRAFFIC
+            # GENERATED AFTER PRESSING PLAY.
+            # ------------------------------------------------
+
+            entries = (
+                read_network_entries(
                     driver
                 )
             )
 
 
-            for response_info in responses:
+            for entry in entries:
 
-                url = (
-                    response_info
-                    .get(
-                        "url",
-                        ""
-                    )
+                url = entry.get(
+                    "url",
+                    "",
                 )
 
-                if not url:
-                    continue
-
-
-                status = (
-                    response_info
-                    .get(
-                        "status",
-                        0
-                    )
+                mime_type = entry.get(
+                    "mime_type",
+                    "",
                 )
 
-                mime_type = (
-                    response_info
-                    .get(
-                        "mime_type",
-                        ""
-                    )
-                )
-
-
-                # We only inspect successful server
-                # responses.
-
-                if not (
-                    200
-                    <= status
-                    < 300
-                ):
-                    continue
-
-
-                # ------------------------------------------
-                # BROAD manifest detection
-                #
-                # This is intentionally not tied to
-                # Brightcove or today's filename.
-                # ------------------------------------------
-
-                if not looks_like_possible_manifest(
+                if not looks_like_hls(
                     url,
                     mime_type,
                 ):
                     continue
 
 
-                decoded_url = (
+                decoded = (
                     deep_unquote(
                         url
                     )
                 )
 
 
-                if (
-                    decoded_url
-                    in validated_urls
-                ):
+                # Request and response can have the same URL.
+                # We allow the response to score separately
+                # because HTTP 200 is extra evidence.
+                identity = (
+                    entry.get(
+                        "kind"
+                    ),
+                    decoded,
+                )
+
+                if identity in seen:
                     continue
 
-
-                validated_urls.add(
-                    decoded_url
+                seen.add(
+                    identity
                 )
 
 
-                logging.info(
-                    "Al Mamlaka possible "
-                    "manifest seen in network: %s",
-                    safe_url_for_log(
-                        decoded_url
+                score = score_mamlaka(
+                    decoded,
+                    mime_type=mime_type,
+                    status=entry.get(
+                        "status"
+                    ),
+                    kind=entry.get(
+                        "kind",
+                        "request",
                     ),
                 )
 
-
-                # ==========================================
-                # 5. TEST IT INDEPENDENTLY
-                #
-                # No Selenium cookies.
-                # No Origin.
-                # No Referer.
-                #
-                # This approximates how OwnTV/VLC would
-                # request the URL.
-                # ==========================================
-
-                validation = (
-                    validate_manifest_standalone(
-                        decoded_url
-                    )
-                )
-
-
-                if not validation:
-
-                    logging.info(
-                        "Rejected candidate because "
-                        "it did not work as an "
-                        "independent stream manifest: %s",
-                        safe_url_for_log(
-                            decoded_url
-                        ),
-                    )
-
+                if score < 0:
                     continue
 
 
-                # ==========================================
-                # 6. SCORE VALIDATED STREAM
-                # ==========================================
-
-                score = (
-                    score_mamlaka_candidate(
-                        decoded_url,
-                        response_info,
-                        validation,
-                    )
+                logging.info(
+                    "Al Mamlaka HLS network "
+                    "candidate after Play: "
+                    "%s | kind=%s | "
+                    "status=%s | mime=%s | "
+                    "score=%d",
+                    safe_url_for_log(
+                        decoded
+                    ),
+                    entry.get(
+                        "kind"
+                    ),
+                    entry.get(
+                        "status"
+                    ),
+                    mime_type
+                    or "<unknown>",
+                    score,
                 )
 
 
@@ -1344,19 +1433,18 @@ def scan_almamlaka():
                     score
                     > best_score
                 ):
-                    best_score = (
-                        score
-                    )
 
-                    best_url = (
-                        validation[
-                            "url"
-                        ]
+                    best_score = score
+
+                    best_url = decoded
+
+                    first_good_candidate_time = (
+                        time.time()
                     )
 
                     logging.info(
-                        "Al Mamlaka NEW BEST "
-                        "validated stream: %s "
+                        "Al Mamlaka: NEW BEST "
+                        "stream found: %s "
                         "(score=%d)",
                         safe_url_for_log(
                             best_url
@@ -1365,42 +1453,44 @@ def scan_almamlaka():
                     )
 
 
-                # ==========================================
-                # 7. VERY HIGH CONFIDENCE RESULT
-                #
-                # Today's known DVR master should score
-                # extremely high.
-                #
-                # BUT we aren't requiring this exact URL.
-                # ==========================================
+            # =================================================
+            # 7. ONCE WE HAVE A GOOD STREAM, WAIT A FEW
+            #    SECONDS FOR A BETTER MASTER REQUEST.
+            #
+            # We don't instantly return the first child
+            # playlist that happens to appear.
+            # =================================================
 
-                if (
-                    best_score
-                    >= 3000
-                ):
-                    logging.info(
-                        "Al Mamlaka high-confidence "
-                        "stream found."
-                    )
+            if (
+                best_url
+                and
+                first_good_candidate_time
+                and
+                (
+                    time.time()
+                    - first_good_candidate_time
+                    >= 8
+                )
+            ):
+                logging.info(
+                    "Al Mamlaka: network "
+                    "settled after playback."
+                )
 
-                    return best_url
+                break
 
 
             time.sleep(1)
 
 
-        # ==================================================
-        # 8. TIMEOUT FINISHED
-        #
-        # If we found any independently validated manifest,
-        # use the best one.
-        # ==================================================
+        # ====================================================
+        # 8. SELECT BEST ACTUAL PLAYBACK URL
+        # ====================================================
 
         if best_url:
 
             logging.info(
-                "Al Mamlaka selected best "
-                "validated stream after full scan: %s "
+                "Al Mamlaka TV: selected %s "
                 "(score=%d)",
                 safe_url_for_log(
                     best_url
@@ -1411,166 +1501,66 @@ def scan_almamlaka():
             return best_url
 
 
-        # ==================================================
-        # 9. NOTHING VALID FOUND
+        # ====================================================
+        # 9. NOTHING WAS FOUND
         #
-        # IMPORTANT:
-        # We do NOT invent a URL.
-        # We do NOT use a hard-coded fallback.
+        # NO hard-coded fallback.
         #
-        # main() therefore doesn't send an Al Mamlaka
-        # update and KV keeps its previous value.
-        # ==================================================
+        # main() simply does not send an Al Mamlaka value
+        # to the Worker, so the previous KV value remains.
+        # ====================================================
 
         logging.error(
-            "Al Mamlaka: no independently "
-            "validated live manifest was discovered."
+            "Al Mamlaka TV: player was "
+            "started but no usable HLS "
+            "stream was observed in the "
+            "actual Chrome network traffic."
         )
 
         return None
 
 
     finally:
-        driver.quit()
+
+        try:
+            driver.quit()
+        except Exception:
+            pass
 
 
-    # ==========================================
-    # ACTUAL MANIFEST CHARACTERISTICS
-    # ==========================================
-
-    if (
-        validation["protocol"]
-        == "hls"
-    ):
-        score += 300
-
-    elif (
-        validation["protocol"]
-        == "dash"
-    ):
-        score += 200
-
-
-    # Prefer a master playlist over a
-    # specific rendition/media playlist.
-
-    if validation.get(
-        "is_master"
-    ):
-        score += 500
-
-    if validation.get(
-        "is_live"
-    ):
-        score += 300
-
-    if validation.get(
-        "is_media"
-    ):
-        score += 100
-
-
-    # ==========================================
-    # SERVER MIME TYPE
-    # ==========================================
-
-    if (
-        "mpegurl"
-        in mime
-    ):
-        score += 150
-
-    if (
-        "dash+xml"
-        in mime
-    ):
-        score += 150
-
-
-    # ==========================================
-    # CURRENT KNOWN AL MAMLAKA CHARACTERISTICS
-    #
-    # IMPORTANT:
-    # These are bonuses, NOT requirements.
-    # ==========================================
-
-    if (
-        "playlist-hls-dvr.m3u8"
-        in lower
-    ):
-        score += 600
-
-    if (
-        "fastly.live.brightcove.com"
-        in lower
-    ):
-        score += 400
-
-    if (
-        "brightcove"
-        in lower
-    ):
-        score += 100
-
-
-    # Generic hints
-
-    if ".m3u8" in lower:
-        score += 100
-
-    if "master" in lower:
-        score += 50
-
-    if "playlist" in lower:
-        score += 50
-
-
-    logging.info(
-        "Al Mamlaka validated manifest: "
-        "%s | protocol=%s | "
-        "master=%s | live=%s | score=%d",
-        safe_url_for_log(
-            url
-        ),
-        validation[
-            "protocol"
-        ],
-        validation.get(
-            "is_master"
-        ),
-        validation.get(
-            "is_live"
-        ),
-        score,
-    )
-
-    return score
-
-# ==========================================================
-# SEND STREAMS TO CLOUDFLARE
-# ==========================================================
+# ============================================================
+# CLOUDFLARE WORKER UPDATE
+# ============================================================
 
 def push_to_worker(
     streams,
 ):
-    update_url = os.environ.get(
-        "WORKER_UPDATE_URL",
-        "",
-    ).strip()
+    update_url = (
+        os.environ.get(
+            "WORKER_UPDATE_URL",
+            "",
+        )
+        .strip()
+    )
 
-    update_secret = os.environ.get(
-        "WORKER_UPDATE_SECRET",
-        "",
-    ).strip()
+    update_secret = (
+        os.environ.get(
+            "WORKER_UPDATE_SECRET",
+            "",
+        )
+        .strip()
+    )
 
     if not update_url:
         raise RuntimeError(
-            "WORKER_UPDATE_URL is missing."
+            "WORKER_UPDATE_URL "
+            "is missing."
         )
 
     if not update_secret:
         raise RuntimeError(
-            "WORKER_UPDATE_SECRET is missing."
+            "WORKER_UPDATE_SECRET "
+            "is missing."
         )
 
     payload = json.dumps(
@@ -1581,11 +1571,8 @@ def push_to_worker(
 
     request = urllib.request.Request(
         update_url,
-
         data=payload,
-
         method="POST",
-
         headers={
             "Content-Type":
                 "application/json",
@@ -1599,25 +1586,26 @@ def push_to_worker(
             "User-Agent":
                 (
                     "jordan-tv-"
-                    "github-updater/1.0"
+                    "github-updater/2.0"
                 ),
         },
     )
 
     logging.info(
-        "Sending %d fresh stream(s) "
-        "to Worker...",
+        "Sending %d fresh "
+        "stream(s) to Worker...",
         len(streams),
     )
 
     try:
+
         with urllib.request.urlopen(
             request,
             timeout=30,
         ) as response:
+
             body = (
-                response
-                .read()
+                response.read()
                 .decode(
                     "utf-8",
                     errors="replace",
@@ -1629,6 +1617,7 @@ def push_to_worker(
             )
 
     except urllib.error.HTTPError as exc:
+
         body = (
             exc.read()
             .decode(
@@ -1638,16 +1627,18 @@ def push_to_worker(
         )
 
         raise RuntimeError(
-            "Worker update failed "
+            "Worker rejected update "
             f"with HTTP {exc.code}: "
             f"{body}"
         ) from exc
 
     except Exception as exc:
+
         raise RuntimeError(
-            "Unable to contact Worker: "
+            "Could not contact Worker: "
             f"{exc}"
         ) from exc
+
 
     if not (
         200
@@ -1655,10 +1646,11 @@ def push_to_worker(
         < 300
     ):
         raise RuntimeError(
-            "Worker returned "
-            f"HTTP {status}: "
+            "Unexpected Worker "
+            f"HTTP status {status}: "
             f"{body}"
         )
+
 
     logging.info(
         "Worker accepted update."
@@ -1670,98 +1662,80 @@ def push_to_worker(
     )
 
 
-# ==========================================================
+# ============================================================
 # MAIN
-# ==========================================================
+# ============================================================
 
 def main():
+
     streams = {}
 
-    # --------------------------
+
+    # ========================================================
     # ROYA TV
-    # --------------------------
+    # ========================================================
 
-    try:
-        roya_tv = (
-            scan_roya_tv()
-        )
+    roya_tv = scan_roya(
+        name="Roya TV",
+        page=ROYA_TV_PAGE,
+        want_news=False,
+    )
 
-        if roya_tv:
-            streams[
-                "roya_tv"
-            ] = roya_tv
-
-    except Exception:
-        logging.exception(
-            "Roya TV scan failed."
-        )
+    if roya_tv:
+        streams[
+            "roya_tv"
+        ] = roya_tv
 
 
-    # --------------------------
+    # ========================================================
     # ROYA NEWS
-    # --------------------------
+    # ========================================================
 
-    try:
-        roya_news = (
-            scan_roya_news()
-        )
+    roya_news = scan_roya(
+        name="Roya News",
+        page=ROYA_NEWS_PAGE,
+        want_news=True,
+    )
 
-        if roya_news:
-            streams[
-                "roya_news"
-            ] = roya_news
-
-    except Exception:
-        logging.exception(
-            "Roya News scan failed."
-        )
+    if roya_news:
+        streams[
+            "roya_news"
+        ] = roya_news
 
 
-    # --------------------------
+    # ========================================================
     # AL MAMLAKA
-    # --------------------------
+    # ========================================================
 
-    try:
-        almamlaka = (
-            scan_almamlaka()
-        )
+    almamlaka = (
+        scan_almamlaka()
+    )
 
-        if almamlaka:
-            streams[
-                "almamlaka"
-            ] = almamlaka
-
-    except Exception:
-        logging.exception(
-            "Al Mamlaka scan failed."
-        )
+    if almamlaka:
+        streams[
+            "almamlaka"
+        ] = almamlaka
 
 
-    # --------------------------
-    # NOTHING FOUND
-    # --------------------------
+    # ========================================================
+    # SEND ONLY SUCCESSFUL STREAMS
+    # ========================================================
 
     if not streams:
         raise RuntimeError(
-            "No fresh streams were found. "
-            "Worker was NOT changed."
+            "No fresh streams "
+            "were discovered."
         )
 
-
-    # --------------------------
-    # IMPORTANT:
-    #
-    # Only successful scans are
-    # sent.
-    #
-    # If one channel fails,
-    # its existing Worker value
-    # remains untouched.
-    # --------------------------
 
     push_to_worker(
         streams
     )
+
+
+    # ========================================================
+    # SUMMARY
+    # ========================================================
 
     logging.info(
         "===================================="
@@ -1778,12 +1752,15 @@ def main():
         ),
     )
 
+
     if len(streams) < 3:
+
         logging.warning(
-            "Only %d of 3 streams were "
-            "freshly updated. "
-            "Existing Worker targets for "
-            "failed channels were preserved.",
+            "Only %d of 3 streams "
+            "were freshly updated. "
+            "Existing Worker targets "
+            "for failed channels "
+            "were preserved.",
             len(streams),
         )
 
