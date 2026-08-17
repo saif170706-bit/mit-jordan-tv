@@ -1047,7 +1047,7 @@ https://live-hls-web-aja.getaj.net/AJA/index.m3u8
 https://streaming.zaytonatube.com:8081/AlMadinatv/almadina21/index.m3u8
 #EXTINF:-1 tvg-logo="https://i.imgur.com/7GaahYh.png" tvg-name="Al Maghribia (1080p)" group-title="General",Al Maghribia (1080p)
 http://185.9.2.18/chid_205/index.m3u8
-#EXTINF:-1 tvg-logo="https://raw.githubusercontent.com/saif170706-bit/qwerdfgjr/main/Almamlaka.png" tvg-name="Al Mamlaka TV" group-title="Uncategorized",Al Mamlaka TV
+#EXTINF:-1 tvg-name="Al Mamlaka TV" tvg-logo="https://raw.githubusercontent.com/saif170706-bit/qwerdfgjr/main/Almamlaka.png" group-title="Jordan",Al Mamlaka TV
 https://jordan-tv-router.saif170706.workers.dev/almamlaka.m3u8
 #EXTINF:-1 tvg-logo="https://i.imgur.com/sOQLV7L.png" tvg-name="Al Manar (576p) [Not 24/7]" group-title="News",Al Manar (576p) [Not 24/7]
 https://edge.fastpublish.me/live/index.m3u8
