@@ -836,21 +836,333 @@ def scan_roya_news():
 # ==========================================================
 # AL MAMLAKA
 # ==========================================================
-
 def scan_almamlaka():
-    return scan_stream(
-        page_url=ALMAMLAKA_PAGE,
-
-        channel_name="Al Mamlaka TV",
-
-        scorer=score_mamlaka,
-
-        timeout_seconds=90,
-
-        early_score=350,
-
-        expander=expand_mamlaka_url,
+    logging.info(
+        "===================================="
     )
+
+    logging.info(
+        "Scanning Al Mamlaka TV"
+    )
+
+    logging.info(
+        "Page: %s",
+        ALMAMLAKA_PAGE,
+    )
+
+    driver = create_driver()
+
+    best_url = None
+    best_score = -1
+
+    seen = set()
+
+    try:
+        # --------------------------------------------------
+        # 1. Open official Al Mamlaka live page
+        # --------------------------------------------------
+
+        try:
+            driver.get(
+                ALMAMLAKA_PAGE
+            )
+
+        except TimeoutException:
+            logging.warning(
+                "Al Mamlaka outer page timed out, "
+                "continuing."
+            )
+
+        time.sleep(6)
+
+        # --------------------------------------------------
+        # 2. Find Brightcove iframe
+        # --------------------------------------------------
+
+        brightcove_url = None
+
+        try:
+            frames = driver.find_elements(
+                By.TAG_NAME,
+                "iframe",
+            )
+
+            logging.info(
+                "Al Mamlaka: found %d iframe(s).",
+                len(frames),
+            )
+
+            for frame in frames:
+                try:
+                    src = (
+                        frame.get_attribute("src")
+                        or ""
+                    )
+
+                    if (
+                        "players.brightcove.net"
+                        in src.lower()
+                    ):
+                        brightcove_url = src
+
+                        logging.info(
+                            "Al Mamlaka: "
+                            "Brightcove iframe found."
+                        )
+
+                        break
+
+                except Exception:
+                    pass
+
+        except Exception:
+            pass
+
+        # --------------------------------------------------
+        # 3. Fallback: find Brightcove URL in HTML
+        # --------------------------------------------------
+
+        if not brightcove_url:
+            try:
+                source = (
+                    driver.page_source
+                    .replace("\\/", "/")
+                )
+
+                matches = re.findall(
+                    r'https?://players\.brightcove\.net/'
+                    r'[^"\'<>\s]+',
+                    source,
+                    flags=re.IGNORECASE,
+                )
+
+                if matches:
+                    brightcove_url = html.unescape(
+                        matches[0]
+                    )
+
+                    logging.info(
+                        "Al Mamlaka: Brightcove "
+                        "player URL found in HTML."
+                    )
+
+            except Exception:
+                pass
+
+        # --------------------------------------------------
+        # 4. Open Brightcove player DIRECTLY
+        # --------------------------------------------------
+
+        if brightcove_url:
+            try:
+                logging.info(
+                    "Al Mamlaka: opening "
+                    "Brightcove player directly."
+                )
+
+                driver.get(
+                    brightcove_url
+                )
+
+                time.sleep(8)
+
+            except TimeoutException:
+                logging.warning(
+                    "Brightcove player timed out, "
+                    "continuing."
+                )
+
+        else:
+            logging.warning(
+                "Al Mamlaka: Brightcove iframe "
+                "was not found."
+            )
+
+        # Clear old performance messages so that
+        # the following scan mainly sees player traffic.
+        try:
+            driver.get_log(
+                "performance"
+            )
+        except Exception:
+            pass
+
+        # --------------------------------------------------
+        # 5. Force player to start
+        # --------------------------------------------------
+
+        try_start_playback(
+            driver
+        )
+
+        # --------------------------------------------------
+        # 6. Watch Brightcove traffic
+        # --------------------------------------------------
+
+        for second in range(100):
+
+            if second % 3 == 0:
+                try_start_playback(
+                    driver
+                )
+
+            candidates = []
+
+            candidates.extend(
+                read_network_urls(
+                    driver
+                )
+            )
+
+            if second % 5 == 0:
+                candidates.extend(
+                    get_resource_urls(
+                        driver
+                    )
+                )
+
+            if second % 10 == 0:
+                candidates.extend(
+                    urls_from_page_source(
+                        driver
+                    )
+                )
+
+            expanded = []
+
+            for candidate in candidates:
+
+                if not candidate:
+                    continue
+
+                if candidate in seen:
+                    continue
+
+                seen.add(
+                    candidate
+                )
+
+                expanded.append(
+                    candidate
+                )
+
+                # Brightcove metrics sometimes contains
+                # the real HLS URL in media_url=
+                try:
+                    extra_urls = (
+                        expand_mamlaka_url(
+                            candidate
+                        )
+                    )
+
+                    expanded.extend(
+                        extra_urls
+                    )
+
+                except Exception:
+                    pass
+
+            # --------------------------------------------------
+            # 7. Examine every candidate
+            # --------------------------------------------------
+
+            for candidate in expanded:
+
+                decoded = deep_unquote(
+                    candidate
+                )
+
+                lower = decoded.lower()
+
+                # ----------------------------------------------
+                # BEST POSSIBLE RESULT
+                # ----------------------------------------------
+
+                if (
+                    "fastly.live.brightcove.com"
+                    in lower
+                    and
+                    "playlist-hls-dvr.m3u8"
+                    in lower
+                ):
+                    logging.info(
+                        "Al Mamlaka: DIRECT DVR "
+                        "master found: %s",
+                        safe_url_for_log(
+                            decoded
+                        ),
+                    )
+
+                    return decoded
+
+                # ----------------------------------------------
+                # OTHERWISE SCORE OTHER HLS MASTER URLS
+                # ----------------------------------------------
+
+                try:
+                    score = score_mamlaka(
+                        decoded
+                    )
+
+                except Exception:
+                    continue
+
+                if score > best_score:
+
+                    best_score = score
+                    best_url = decoded
+
+                    if score >= 0:
+                        logging.info(
+                            "Al Mamlaka candidate: "
+                            "%s (score=%d)",
+                            safe_url_for_log(
+                                decoded
+                            ),
+                            score,
+                        )
+
+            # Give Brightcove enough time to initialize,
+            # but stop early once we have a very good URL.
+
+            if (
+                second >= 20
+                and
+                best_url
+                and
+                best_score >= 350
+            ):
+                break
+
+            time.sleep(1)
+
+        # --------------------------------------------------
+        # 8. Return best non-DVR candidate if needed
+        # --------------------------------------------------
+
+        if (
+            best_url
+            and
+            best_score >= 0
+        ):
+            logging.info(
+                "Al Mamlaka: selected %s",
+                safe_url_for_log(
+                    best_url
+                ),
+            )
+
+            return best_url
+
+        logging.error(
+            "Al Mamlaka TV: "
+            "no usable Brightcove stream found."
+        )
+
+        return None
+
+    finally:
+        driver.quit()
 
 
 # ==========================================================
