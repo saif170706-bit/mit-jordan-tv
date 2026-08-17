@@ -152,6 +152,7 @@ jobs:
 
               try:
                   ep_number = int(episode)
+
               except ValueError:
                   print(
                       f"ERROR: invalid episode: "
@@ -251,11 +252,11 @@ jobs:
           import csv
           import json
           import os
-          import re
           import shutil
           import subprocess
           import sys
           import tempfile
+
           from pathlib import Path
 
 
@@ -378,7 +379,7 @@ jobs:
 
 
           # ========================================================
-          # PROBE SOURCE M3U8
+          # PROBE SOURCE
           # ========================================================
 
           def probe_source(url):
@@ -386,10 +387,13 @@ jobs:
               process = run(
                   [
                       "ffprobe",
+
                       "-headers",
                       HEADERS,
+
                       "-v",
                       "error",
+
                       "-show_entries",
                       (
                           "stream="
@@ -399,14 +403,17 @@ jobs:
                           "height,"
                           "r_frame_rate"
                       ),
+
                       "-show_entries",
                       (
                           "format="
                           "duration,"
                           "bit_rate"
                       ),
+
                       "-of",
                       "json",
+
                       url,
                   ],
                   timeout=60,
@@ -444,7 +451,6 @@ jobs:
                       "No video stream found"
                   )
 
-
               best = max(
                   videos,
                   key=lambda x: int(
@@ -452,7 +458,6 @@ jobs:
                       or 0
                   )
               )
-
 
               width = int(
                   best.get("width")
@@ -464,14 +469,12 @@ jobs:
                   or 0
               )
 
-
               fps = (
                   best.get(
                       "r_frame_rate"
                   )
                   or ""
               )
-
 
               duration_text = (
                   probe
@@ -484,13 +487,11 @@ jobs:
                   )
               )
 
-
               duration = (
                   float(duration_text)
                   if duration_text
                   else 0.0
               )
-
 
               return {
                   "width": width,
@@ -524,7 +525,6 @@ jobs:
                   .splitlines()
               ]
 
-
               if (
                   "#EXT-X-ENDLIST"
                   not in lines
@@ -535,7 +535,6 @@ jobs:
                       "does not contain "
                       "#EXT-X-ENDLIST"
                   )
-
 
               if not any(
                   line.startswith(
@@ -550,14 +549,12 @@ jobs:
                       "byte ranges"
                   )
 
-
               segments = []
 
               pending_duration = None
               pending_range = None
 
               previous_end = 0
-
 
               for line in lines:
 
@@ -591,14 +588,14 @@ jobs:
                           1
                       )[1]
 
-
                       if "@" in value:
 
-                          length_text, offset_text = (
-                              value.split(
-                                  "@",
-                                  1
-                              )
+                          (
+                              length_text,
+                              offset_text
+                          ) = value.split(
+                              "@",
+                              1
                           )
 
                           length = int(
@@ -618,7 +615,6 @@ jobs:
                           offset = (
                               previous_end
                           )
-
 
                       pending_range = {
                           "length": length,
@@ -671,20 +667,17 @@ jobs:
                           pending_duration = None
                           pending_range = None
 
-
               if not segments:
 
                   raise RuntimeError(
                       "No HLS segments parsed"
                   )
 
-
               total_duration = sum(
                   item["duration"]
                   for item
                   in segments
               )
-
 
               return {
                   "segments": segments,
@@ -708,14 +701,12 @@ jobs:
                   csv.DictReader(f)
               )
 
-
           rows.sort(
               key=lambda row:
                   int(
                       row["episode"]
                   )
           )
-
 
           assets = get_asset_names()
 
@@ -753,7 +744,6 @@ jobs:
                   f"S1E{episode:02d}"
               )
 
-
               ts_name = (
                   f"{name}.ts"
               )
@@ -766,13 +756,11 @@ jobs:
                   f"{name}.json"
               )
 
-
               required_assets = {
                   ts_name,
                   playlist_name,
                   json_name,
               }
-
 
               print("")
               print("")
@@ -787,11 +775,14 @@ jobs:
               )
 
 
+              # ----------------------------------------------------
+              # SKIP ALREADY COMPLETED EPISODES
+              # ----------------------------------------------------
+
               if (
                   not FORCE
                   and
-                  required_assets
-                  .issubset(
+                  required_assets.issubset(
                       assets
                   )
               ):
@@ -822,70 +813,107 @@ jobs:
 
               try:
 
-                  # -----------------------------------------------
+                  # ================================================
                   # VERIFY SOURCE QUALITY
-                  # -----------------------------------------------
+                  # ================================================
 
                   print("")
                   print(
                       "Verifying source..."
                   )
 
-
                   probe = probe_source(
                       url
                   )
-
 
                   info = analyse_probe(
                       probe
                   )
 
-
                   print("")
                   print(
                       "SOURCE QUALITY:"
                   )
+
                   print(
                       "Width:",
                       info["width"]
                   )
+
                   print(
                       "Height:",
                       info["height"]
                   )
+
                   print(
                       "FPS:",
                       info["fps"]
                   )
+
                   print(
                       "Duration:",
                       info["duration"]
                   )
 
 
+                  # ================================================
+                  # QUALITY REQUIREMENT
+                  #
+                  # S1E01-S1E26:
+                  # minimum 720p
+                  #
+                  # S1E27:
+                  # only available in 480p,
+                  # so minimum 480p is accepted.
+                  # ================================================
+
+                  minimum_height = (
+                      480
+                      if episode == 27
+                      else 720
+                  )
+
+
                   if (
                       info["height"]
-                      < 720
+                      < minimum_height
                   ):
 
                       raise RuntimeError(
                           "SOURCE REJECTED: "
                           f"only "
                           f"{info['width']}x"
-                          f"{info['height']}"
+                          f"{info['height']} "
+                          f"(minimum for "
+                          f"{name}: "
+                          f"{minimum_height}p)"
                       )
 
 
                   print("")
                   print(
-                      "720P CHECK: PASSED"
+                      "QUALITY CHECK: PASSED"
                   )
 
 
-                  # -----------------------------------------------
+                  if episode == 27:
+
+                      print(
+                          "NOTE: S1E27 accepted "
+                          "at 480p because no "
+                          "720p source exists."
+                      )
+
+                  else:
+
+                      print(
+                          "720P CHECK: PASSED"
+                      )
+
+
+                  # ================================================
                   # PACKAGE INTO SINGLE-FILE HLS
-                  # -----------------------------------------------
+                  # ================================================
 
                   ts_path = (
                       workdir
@@ -916,6 +944,7 @@ jobs:
                   run(
                       [
                           "ffmpeg",
+
                           "-y",
 
                           "-headers",
@@ -962,9 +991,9 @@ jobs:
                   )
 
 
-                  # -----------------------------------------------
+                  # ================================================
                   # CHECK OUTPUT FILES
-                  # -----------------------------------------------
+                  # ================================================
 
                   if not ts_path.exists():
 
@@ -1004,9 +1033,9 @@ jobs:
                       )
 
 
-                  # -----------------------------------------------
-                  # PARSE BYTE RANGE METADATA
-                  # -----------------------------------------------
+                  # ================================================
+                  # PARSE BYTE-RANGE METADATA
+                  # ================================================
 
                   hls_info = (
                       parse_hls_playlist(
@@ -1015,10 +1044,18 @@ jobs:
                   )
 
 
+                  # ================================================
+                  # CREATE EPISODE METADATA
+                  # ================================================
+
                   metadata = {
                       "season": 1,
-                      "episode": episode,
-                      "name": name,
+
+                      "episode":
+                          episode,
+
+                      "name":
+                          name,
 
                       "width":
                           info["width"],
@@ -1082,27 +1119,30 @@ jobs:
                   print(
                       "PACKAGED:"
                   )
+
                   print(
                       "Segments:",
                       metadata[
                           "segment_count"
                       ]
                   )
+
                   print(
                       "Duration:",
                       metadata[
                           "packaged_duration"
                       ]
                   )
+
                   print(
                       "TS size:",
                       ts_size
                   )
 
 
-                  # -----------------------------------------------
+                  # ================================================
                   # UPLOAD RELEASE ASSETS
-                  # -----------------------------------------------
+                  # ================================================
 
                   print("")
                   print(
@@ -1131,8 +1171,9 @@ jobs:
                   ]
 
 
-                  # If this is a rebuild, or only part of a previous
-                  # upload exists, replace all three files together.
+                  # Rebuilding or partially existing assets:
+                  # overwrite the existing files.
+
                   if (
                       FORCE
                       or
@@ -1176,12 +1217,15 @@ jobs:
                   print(
                       "!!!!!!!!!!!!!!!!!!!!!!!!"
                   )
+
                   print(
                       f"FAILED: {name}"
                   )
+
                   print(
                       "!!!!!!!!!!!!!!!!!!!!!!!!"
                   )
+
                   print(
                       str(exc)
                   )
@@ -1205,7 +1249,7 @@ jobs:
 
 
           # ========================================================
-          # SUMMARY
+          # INGEST SUMMARY
           # ========================================================
 
           print("")
@@ -1213,12 +1257,15 @@ jobs:
           print(
               "======================================"
           )
+
           print(
               "SEASON 1 INGEST SUMMARY"
           )
+
           print(
               "======================================"
           )
+
 
           print(
               "Uploaded:",
@@ -1244,6 +1291,7 @@ jobs:
               )
 
               for item in successes:
+
                   print(
                       " -",
                       item
@@ -1258,6 +1306,7 @@ jobs:
               )
 
               for item in skipped:
+
                   print(
                       " -",
                       item
@@ -1301,7 +1350,8 @@ jobs:
           )
 
 
-          # Fail only AFTER trying all episodes.
+          # Fail only after trying every episode.
+
           if failures:
 
               sys.exit(1)
@@ -1340,9 +1390,11 @@ jobs:
             --dir season1-metadata \
             --clobber || true
 
+
           python - <<'PY'
 
           import json
+
           from pathlib import Path
 
 
@@ -1369,8 +1421,6 @@ jobs:
                   data = json.load(f)
 
 
-              # The season index does not need
-              # to duplicate all segment ranges.
               episodes.append({
                   "season":
                       data["season"],
@@ -1428,7 +1478,8 @@ jobs:
 
 
           index = {
-              "season": 1,
+              "season":
+                  1,
 
               "episode_count":
                   len(episodes),
@@ -1462,22 +1513,48 @@ jobs:
           print(
               "======================================"
           )
+
           print(
               "SEASON INDEX"
           )
+
           print(
               "======================================"
           )
+
           print(
               "Episodes:",
               len(episodes)
           )
+
           print(
               "Total duration:",
               total_duration
           )
 
+
+          if len(episodes) == 27:
+
+              print("")
+              print(
+                  "SUCCESS: "
+                  "ALL 27 SEASON 1 "
+                  "EPISODES ARE PRESENT"
+              )
+
+          else:
+
+              print("")
+              print(
+                  "WARNING: "
+                  f"Season index currently "
+                  f"contains "
+                  f"{len(episodes)} "
+                  f"of 27 episodes."
+              )
+
           PY
+
 
           gh release upload \
             "$RELEASE_TAG" \
