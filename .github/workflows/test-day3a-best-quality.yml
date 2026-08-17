@@ -1,0 +1,95 @@
+name: Test Dailymotion Best Quality
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install yt-dlp and FFmpeg
+        run: |
+          python -m pip install -U yt-dlp
+
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+          echo "yt-dlp:"
+          yt-dlp --version
+
+          echo "FFmpeg:"
+          ffmpeg -version | head -n 1
+
+      - name: Read first episode from source file
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          URL=$(tail -n +2 day3a_sources.csv | head -n 1 | cut -d',' -f3-)
+
+          if [ -z "$URL" ]; then
+            echo "ERROR: No URL found in day3a_sources.csv"
+            exit 1
+          fi
+
+          echo "Testing first episode from day3a_sources.csv"
+
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      - name: List all available qualities
+        env:
+          VIDEO_URL: ${{ steps.source.outputs.url }}
+        run: |
+          echo "======================================"
+          echo "AVAILABLE FORMATS"
+          echo "======================================"
+
+          yt-dlp \
+            --no-playlist \
+            -F \
+            "$VIDEO_URL"
+
+      - name: Create 90-second best-quality sample
+        env:
+          VIDEO_URL: ${{ steps.source.outputs.url }}
+        run: |
+          echo "======================================"
+          echo "DOWNLOADING BEST AVAILABLE QUALITY"
+          echo "======================================"
+
+          yt-dlp \
+            --no-playlist \
+            --download-sections "*0-90" \
+            -f "bv*+ba/b" \
+            --merge-output-format mp4 \
+            -o "day3a-best.%(ext)s" \
+            "$VIDEO_URL"
+
+      - name: Show final video quality
+        run: |
+          echo "======================================"
+          echo "FINAL FILE"
+          echo "======================================"
+
+          ffprobe \
+            -v error \
+            -show_entries stream=codec_type,codec_name,width,height,r_frame_rate,bit_rate \
+            -show_entries format=duration,size \
+            -of default=noprint_wrappers=1 \
+            day3a-best.mp4
+
+      - name: Upload sample
+        uses: actions/upload-artifact@v4
+        with:
+          name: day3a-best-quality-test
+          path: day3a-best.mp4
+          retention-days: 1
