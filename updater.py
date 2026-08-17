@@ -983,43 +983,43 @@ def score_mamlaka(
     kind="request",
 ):
     """
-    Score an ACTUAL HLS URL seen while the
-    official Al Mamlaka player is running.
+    Score an actual HLS URL seen while the
+    Al Mamlaka player is running.
 
-    Current known Al Mamlaka characteristics get
-    strong bonuses, but are NOT requirements.
+    Known current Al Mamlaka characteristics
+    receive bonuses, but are NOT requirements.
     """
 
     decoded = deep_unquote(
         url
     )
 
-lower = decoded.lower()
+    lower = decoded.lower()
 
-# Never accept analytics / tracking traffic as a stream.
-if "metrics.brightcove.com" in lower:
-    return -1
+    # Never accept analytics / tracking traffic as a stream.
+    if "metrics.brightcove.com" in lower:
+        return -1
 
-if (
-    mime_type
-    and
-    "image/" in mime_type.lower()
-):
-    return -1
+    # Never accept image responses as stream manifests.
+    if (
+        mime_type
+        and
+        "image/" in mime_type.lower()
+    ):
+        return -1
 
-if not looks_like_hls(
-    decoded,
-    mime_type,
-):
-    return -1
+    # Must at least look like HLS traffic.
+    if not looks_like_hls(
+        decoded,
+        mime_type,
+    ):
+        return -1
 
-score = 100
+    score = 100
 
-
-    # --------------------------------------------------------
-    # We prefer URLs actually returned successfully
-    # by the server.
-    # --------------------------------------------------------
+    # ========================================================
+    # Prefer actual responses over requests.
+    # ========================================================
 
     if kind == "response":
         score += 150
@@ -1039,10 +1039,9 @@ score = 100
     except Exception:
         pass
 
-
-    # --------------------------------------------------------
+    # ========================================================
     # Generic HLS/master clues
-    # --------------------------------------------------------
+    # ========================================================
 
     if ".m3u8" in lower:
         score += 100
@@ -1059,11 +1058,9 @@ score = 100
     if "dvr" in lower:
         score += 100
 
-
-    # --------------------------------------------------------
-    # Avoid choosing an individual video rendition if
-    # a real master playlist is present.
-    # --------------------------------------------------------
+    # ========================================================
+    # Penalize child/rendition playlists.
+    # ========================================================
 
     child_clues = [
         "chunks.m3u8",
@@ -1078,15 +1075,11 @@ score = 100
     ):
         score -= 250
 
-
-    # --------------------------------------------------------
-    # Current CORRECT Al Mamlaka stream characteristics.
+    # ========================================================
+    # Current known Al Mamlaka characteristics.
     #
-    # These are BONUSES ONLY.
-    #
-    # Tomorrow the domain/path may change and the scanner
-    # can still accept another HLS master.
-    # --------------------------------------------------------
+    # BONUSES ONLY — not requirements.
+    # ========================================================
 
     if (
         "fastly.live.brightcove.com"
@@ -1106,9 +1099,9 @@ score = 100
     ):
         score += 500
 
-
-    # MIME type is useful even if the URL naming
-    # convention changes entirely.
+    # ========================================================
+    # MIME type
+    # ========================================================
 
     lower_mime = (
         mime_type
