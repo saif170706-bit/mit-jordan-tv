@@ -1,217 +1,79 @@
-name: Test Day3a Streamlink 720p
+name: Test Direct Day3a 720p HLS
 
 on:
   workflow_dispatch:
 
-permissions:
-  contents: read
-
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 15
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Streamlink and FFmpeg
+      - name: Install FFmpeg
         run: |
-          set -e
-
-          python -m pip install --upgrade pip
-          python -m pip install -U streamlink
-
           sudo apt-get update
           sudo apt-get install -y ffmpeg
 
-          echo ""
-          echo "======================================"
-          echo "STREAMLINK VERSION"
-          echo "======================================"
-          streamlink --version
-
-          echo ""
-          echo "======================================"
-          echo "FFMPEG VERSION"
-          echo "======================================"
-          ffmpeg -version | head -n 1
-
-      - name: Read first episode from CSV
-        id: source
+      - name: Test direct 720p HLS
         shell: bash
-        run: |
-          set -euo pipefail
-
-          python - <<'PY'
-          import csv
-          import os
-          import sys
-
-          filename = "day3a_sources.csv"
-
-          if not os.path.exists(filename):
-              print("ERROR: day3a_sources.csv not found")
-              sys.exit(1)
-
-          with open(
-              filename,
-              "r",
-              encoding="utf-8-sig",
-              newline=""
-          ) as f:
-              reader = csv.DictReader(f)
-              rows = list(reader)
-
-          if not rows:
-              print("ERROR: CSV contains no episodes")
-              sys.exit(1)
-
-          row = rows[0]
-
-          season = (row.get("season") or "").strip()
-          episode = (row.get("episode") or "").strip()
-          url = (row.get("url") or "").strip()
-
-          if not url:
-              print("ERROR: No URL in first row")
-              sys.exit(1)
-
-          print("")
-          print("======================================")
-          print("EPISODE SELECTED")
-          print("======================================")
-          print(f"Season: {season}")
-          print(f"Episode: {episode}")
-          print(f"URL: {url}")
-          print("")
-
-          with open(
-              os.environ["GITHUB_OUTPUT"],
-              "a",
-              encoding="utf-8"
-          ) as out:
-              out.write(f"url={url}\n")
-          PY
-
-      - name: List Dailymotion streams with Streamlink
-        env:
-          VIDEO_URL: ${{ steps.source.outputs.url }}
         run: |
           set -e
 
-          echo ""
+          URL='https://vod3.cf.dmcdn.net/sec2(62G_XEy4nbkofQN0R9lDICYerhJJ8bE-txTSNwnDkAPB5F7jXBm_RmOurbEsnIioGkCxKj1FpijCX2zUnC3cRevMRF1m4CcrpKof-AGsFMehneeChcEJ6vp3wwD735jNiCw9_4MH9hNkep-bpJgWAVlItmu2MuesKLm5u_gWF3GLg0MbO-WmfP6yJE4iZhRw)/video/417/964/231469714_mp4_h264_aac_hd_6.m3u8'
+
+          HEADERS=$'Origin: https://geo.dailymotion.com\r\nReferer: https://geo.dailymotion.com/\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36\r\n'
+
           echo "======================================"
-          echo "STREAMLINK AVAILABLE QUALITIES"
+          echo "FFPROBE DIRECT 720P STREAM"
           echo "======================================"
-          echo ""
-
-          streamlink \
-            --no-config \
-            --loglevel=debug \
-            "$VIDEO_URL"
-
-      - name: Get best stream URL
-        id: best
-        shell: bash
-        env:
-          VIDEO_URL: ${{ steps.source.outputs.url }}
-        run: |
-          set -euo pipefail
-
-          echo ""
-          echo "======================================"
-          echo "RESOLVING BEST STREAM"
-          echo "======================================"
-          echo ""
-
-          BEST_URL=$(
-            streamlink \
-              --no-config \
-              --stream-url \
-              "$VIDEO_URL" \
-              best
-          )
-
-          if [ -z "$BEST_URL" ]; then
-              echo "ERROR: Streamlink did not return a stream URL"
-              exit 1
-          fi
-
-          echo "Best stream URL found."
-          echo "$BEST_URL"
-
-          {
-            echo "url<<EOF"
-            echo "$BEST_URL"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Inspect best HLS stream
-        env:
-          BEST_URL: ${{ steps.best.outputs.url }}
-        run: |
-          set -e
-
-          echo ""
-          echo "======================================"
-          echo "BEST STREAM INFORMATION"
-          echo "======================================"
-          echo ""
 
           ffprobe \
+            -headers "$HEADERS" \
             -v error \
-            -show_entries \
-            stream=index,codec_type,codec_name,width,height,r_frame_rate,bit_rate \
-            -show_entries \
-            format=duration,bit_rate \
+            -show_entries stream=index,codec_type,codec_name,width,height,r_frame_rate \
+            -show_entries format=duration \
             -of default=noprint_wrappers=1 \
-            "$BEST_URL"
+            "$URL"
 
       - name: Download 90 second sample
-        env:
-          BEST_URL: ${{ steps.best.outputs.url }}
+        shell: bash
         run: |
           set -e
 
-          echo ""
+          URL='https://vod3.cf.dmcdn.net/sec2(62G_XEy4nbkofQN0R9lDICYerhJJ8bE-txTSNwnDkAPB5F7jXBm_RmOurbEsnIioGkCxKj1FpijCX2zUnC3cRevMRF1m4CcrpKof-AGsFMehneeChcEJ6vp3wwD735jNiCw9_4MH9hNkep-bpJgWAVlItmu2MuesKLm5u_gWF3GLg0MbO-WmfP6yJE4iZhRw)/video/417/964/231469714_mp4_h264_aac_hd_6.m3u8'
+
+          HEADERS=$'Origin: https://geo.dailymotion.com\r\nReferer: https://geo.dailymotion.com/\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36\r\n'
+
           echo "======================================"
-          echo "DOWNLOADING 90 SECOND SAMPLE"
+          echo "DOWNLOADING 90 SECOND 720P SAMPLE"
           echo "======================================"
-          echo ""
 
           ffmpeg \
             -y \
-            -i "$BEST_URL" \
+            -headers "$HEADERS" \
+            -i "$URL" \
             -t 90 \
             -map 0:v:0 \
             -map 0:a:0? \
             -c copy \
-            day3a-streamlink-test.mp4
+            day3a-720-test.mp4
 
       - name: Verify downloaded sample
         run: |
-          set -e
-
-          echo ""
           echo "======================================"
-          echo "FINAL SAMPLE QUALITY"
+          echo "FINAL FILE QUALITY"
           echo "======================================"
-          echo ""
 
           ffprobe \
             -v error \
-            -show_entries \
-            stream=index,codec_type,codec_name,width,height,r_frame_rate,bit_rate \
-            -show_entries \
-            format=duration,size,bit_rate \
+            -show_entries stream=index,codec_type,codec_name,width,height,r_frame_rate \
+            -show_entries format=duration,size,bit_rate \
             -of default=noprint_wrappers=1 \
-            day3a-streamlink-test.mp4
+            day3a-720-test.mp4
 
       - name: Upload sample
         uses: actions/upload-artifact@v4
         with:
-          name: day3a-streamlink-quality-test
-          path: day3a-streamlink-test.mp4
+          name: day3a-direct-720p-test
+          path: day3a-720-test.mp4
           retention-days: 1
-          if-no-files-found: error
