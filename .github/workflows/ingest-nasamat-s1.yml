@@ -346,7 +346,6 @@ jobs:
           )
 
 
-          MINIMUM_HEIGHT = 480
 
 
           USER_AGENT = (
@@ -970,16 +969,7 @@ jobs:
           selected_info = None
 
 
-          candidates = [
-              variant
-              for variant
-              in variants
-              if (
-                  variant["height"]
-                  >=
-                  MINIMUM_HEIGHT
-              )
-          ]
+          candidates = list(variants)
 
 
           if not candidates:
@@ -1031,19 +1021,6 @@ jobs:
                   )
 
 
-                  if (
-                      info["height"]
-                      <
-                      MINIMUM_HEIGHT
-                  ):
-
-                      print(
-                          "Rejected: below 480p."
-                      )
-
-                      continue
-
-
                   selected_url = (
                       candidate["url"]
                   )
@@ -1070,8 +1047,7 @@ jobs:
           ):
 
               raise RuntimeError(
-                  "No accessible variant "
-                  "of at least 480p was found."
+                  "No accessible stream variant was found."
               )
 
 
@@ -1126,7 +1102,8 @@ jobs:
           else:
 
               print(
-                  "QUALITY: 480p"
+                  "QUALITY: "
+                  f"{selected_info['height']}p"
               )
 
 
@@ -1680,9 +1657,10 @@ jobs:
 
           gh release download \
             "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
             --pattern 'NasamatS1E*.json' \
             --dir nasamat-metadata \
-            --clobber || true
+            --clobber
 
 
       - name: Build Season 1 index
@@ -1947,10 +1925,12 @@ jobs:
 
               print("")
               print(
-                  "WARNING: "
+                  "ERROR: "
                   f"{30 - len(episodes)} "
                   f"episodes are still missing."
               )
+
+              raise SystemExit(1)
 
           PY
 
@@ -1962,4 +1942,5 @@ jobs:
           gh release upload \
             "$RELEASE_TAG" \
             nasamat-season1-index.json \
+            --repo "$GITHUB_REPOSITORY" \
             --clobber
