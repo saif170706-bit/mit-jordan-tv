@@ -1,0 +1,48 @@
+name: Test Al Kherba Episode 1
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Install yt-dlp
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -U yt-dlp
+
+      - name: Check FFmpeg
+        run: |
+          ffmpeg -version | head -n 1
+          ffprobe -version | head -n 1
+
+      - name: Show all available formats
+        run: |
+          yt-dlp \
+            --no-playlist \
+            -F \
+            "https://www.youtube.com/watch?v=WKuIkuNKd1s"
+
+      - name: Detect highest available quality
+        run: |
+          yt-dlp \
+            --no-playlist \
+            --simulate \
+            --verbose \
+            -f "bestvideo+bestaudio/best" \
+            --print "TITLE: %(title)s" \
+            --print "VIDEO ID: %(id)s" \
+            --print "SELECTED FORMAT: %(format_id)s" \
+            --print "RESOLUTION: %(resolution)s" \
+            --print "WIDTH: %(width)s" \
+            --print "HEIGHT: %(height)s" \
+            --print "FPS: %(fps)s" \
+            --print "VIDEO CODEC: %(vcodec)s" \
+            --print "AUDIO CODEC: %(acodec)s" \
+            "https://www.youtube.com/watch?v=WKuIkuNKd1s"
