@@ -1,4 +1,4 @@
-name: Test Al Kherba S1E01 ingest
+name: Test Al Kherba S1E01 Ingest
 
 on:
   workflow_dispatch:
@@ -9,70 +9,165 @@ permissions:
 jobs:
   ingest-e01:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     env:
       SOURCE_URL: "https://www.youtube.com/watch?v=WKuIkuNKd1s"
       RELEASE_TAG: "al-kherba-s1-media"
       BASENAME: "AlKherbaS1E01"
+      BGUTIL_HOME: "/home/runner/bgutil-ytdlp-pot-provider"
 
     steps:
+      # ------------------------------------------------------------
+      # 1. Repository
+      # ------------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # ------------------------------------------------------------
+      # 2. Python
+      # ------------------------------------------------------------
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
+      # ------------------------------------------------------------
+      # 3. Deno
+      # ------------------------------------------------------------
       - name: Set up Deno
         uses: denoland/setup-deno@v2
         with:
           deno-version: "v2.x"
 
-      - name: Install yt-dlp with EJS support
+      # ------------------------------------------------------------
+      # 4. yt-dlp + PO token provider
+      # ------------------------------------------------------------
+      - name: Install yt-dlp and PO-token provider
+        shell: bash
         run: |
+          set -euo pipefail
+
           python -m pip install --upgrade pip
           python -m pip install -U "yt-dlp[default]"
+          python -m pip install -U bgutil-ytdlp-pot-provider
 
+          rm -rf "$BGUTIL_HOME"
+
+          git clone --depth 1 \
+            https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git \
+            "$BGUTIL_HOME"
+
+          cd "$BGUTIL_HOME/server"
+
+          npm ci
+          npx tsc
+
+          echo
+          echo "============================"
+          echo "VERSIONS"
+          echo "============================"
+
+          yt-dlp --version
+          deno --version
+          node --version
+          npm --version
+
+      # ------------------------------------------------------------
+      # 5. FFmpeg
+      # ------------------------------------------------------------
       - name: Ensure FFmpeg is available
         shell: bash
         run: |
           set -euo pipefail
-          if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
+
+          if ! command -v ffmpeg >/dev/null 2>&1 || \
+             ! command -v ffprobe >/dev/null 2>&1; then
+
             sudo apt-get update
             sudo apt-get install -y ffmpeg
           fi
 
-          echo "yt-dlp: $(yt-dlp --version)"
-          echo "Deno:"
-          deno --version
-          echo "FFmpeg:"
           ffmpeg -version | head -n 1
+          ffprobe -version | head -n 1
 
-      - name: Show available source formats
+      # ------------------------------------------------------------
+      # 6. Verify yt-dlp sees the bgutil provider
+      # ------------------------------------------------------------
+      - name: Verify PO-token provider
         shell: bash
         run: |
           set -euo pipefail
+
+          echo "Testing yt-dlp + Deno + bgutil..."
+
+          yt-dlp \
+            --verbose \
+            --no-playlist \
+            --js-runtimes deno \
+            --extractor-args "youtube:player-client=mweb;youtubepot-bgutilscript:server_home=$BGUTIL_HOME/server" \
+            --simulate \
+            "$SOURCE_URL"
+
+      # ------------------------------------------------------------
+      # 7. Show every format that GitHub can access
+      # ------------------------------------------------------------
+      - name: Show available formats
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo
+          echo "=========================================="
+          echo "AVAILABLE FORMATS"
+          echo "=========================================="
+
           yt-dlp \
             --no-playlist \
             --js-runtimes deno \
+            --extractor-args "youtube:player-client=mweb;youtubepot-bgutilscript:server_home=$BGUTIL_HOME/server" \
             -F \
             "$SOURCE_URL"
 
+      # ------------------------------------------------------------
+      # 8. Download BEST accessible resolution
+      #
+      # IMPORTANT:
+      #
+      # NO 480p limit
+      # NO 720p limit
+      # NO resolution hard-coded
+      #
+      # Priority:
+      #
+      # 1. Highest resolution
+      # 2. At same resolution prefer H.264 / AVC
+      # 3. Prefer MP4A/AAC audio
+      # 4. Prefer higher audio bitrate
+      #
+      # --check-formats makes yt-dlp verify that the selected
+      # format is actually downloadable.
+      # ------------------------------------------------------------
       - name: Download highest accessible resolution
         shell: bash
         run: |
           set -euo pipefail
 
-          # Selection policy:
-          #   1) Highest available/downloadable resolution first.
-          #   2) At that same resolution, prefer H.264/AVC.
-          #   3) Prefer AAC/MP4A audio, then highest audio bitrate.
-          #   4) No resolution is hard-coded.
+          rm -f source.* || true
+
+          echo
+          echo "=========================================="
+          echo "DOWNLOADING HIGHEST ACCESSIBLE QUALITY"
+          echo "=========================================="
+          echo
+          echo "Resolution is NOT hard-coded."
+          echo
+
           yt-dlp \
+            --verbose \
             --no-playlist \
             --js-runtimes deno \
+            --extractor-args "youtube:player-client=mweb;youtubepot-bgutilscript:server_home=$BGUTIL_HOME/server" \
             --check-formats \
             --format-sort-force \
             -S "res,+vcodec:avc,+acodec:m4a,abr" \
@@ -82,7 +177,9 @@ jobs:
             -o "source.%(ext)s" \
             "$SOURCE_URL"
 
-          MEDIA_FILE="$(find . -maxdepth 1 -type f \
+          MEDIA_FILE="$(find . \
+            -maxdepth 1 \
+            -type f \
             -name 'source.*' \
             ! -name 'source.info.json' \
             ! -name '*.part' \
@@ -90,79 +187,150 @@ jobs:
             | head -n 1)"
 
           if [ -z "${MEDIA_FILE:-}" ]; then
-            echo "ERROR: downloaded media file was not found"
+            echo "ERROR: downloaded media file not found"
             exit 1
           fi
 
           echo "MEDIA_FILE=$MEDIA_FILE" >> "$GITHUB_ENV"
-          echo "Downloaded: $MEDIA_FILE"
 
+          echo
+          echo "Downloaded:"
+          ls -lh "$MEDIA_FILE"
+
+      # ------------------------------------------------------------
+      # 9. Show exactly what yt-dlp selected
+      # ------------------------------------------------------------
       - name: Verify selected source quality
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Selected source streams:"
-          ffprobe -v error \
-            -show_entries stream=index,codec_type,codec_name,width,height,r_frame_rate \
+          echo
+          echo "=========================================="
+          echo "FINAL SOURCE QUALITY"
+          echo "=========================================="
+
+          ffprobe \
+            -v error \
+            -show_entries \
+            stream=index,codec_type,codec_name,width,height,r_frame_rate,bit_rate \
             -of json \
             "$MEDIA_FILE"
 
           echo
-          echo "yt-dlp selected format IDs:"
+          echo "=========================================="
+          echo "YT-DLP FORMAT SELECTION"
+          echo "=========================================="
+
           python - <<'PY'
           import json
 
           with open("source.info.json", "r", encoding="utf-8") as f:
               info = json.load(f)
 
-          req = info.get("requested_formats") or []
-          if req:
-              for x in req:
+          print("TITLE:", info.get("title"))
+          print("VIDEO ID:", info.get("id"))
+          print()
+
+          requested = info.get("requested_formats") or []
+
+          if requested:
+              for f in requested:
                   print(
-                      f"  {x.get('format_id')} | "
-                      f"{x.get('width')}x{x.get('height')} | "
-                      f"vcodec={x.get('vcodec')} | "
-                      f"acodec={x.get('acodec')} | "
-                      f"abr={x.get('abr')}"
+                      "FORMAT:",
+                      f.get("format_id"),
+                      "|",
+                      f"{f.get('width')}x{f.get('height')}",
+                      "|",
+                      "vcodec=" + str(f.get("vcodec")),
+                      "|",
+                      "acodec=" + str(f.get("acodec")),
+                      "|",
+                      "fps=" + str(f.get("fps")),
+                      "|",
+                      "tbr=" + str(f.get("tbr")),
+                      "|",
+                      "abr=" + str(f.get("abr"))
                   )
           else:
               print(
-                  f"  {info.get('format_id')} | "
-                  f"{info.get('width')}x{info.get('height')} | "
-                  f"vcodec={info.get('vcodec')} | "
-                  f"acodec={info.get('acodec')}"
+                  "FORMAT:",
+                  info.get("format_id"),
+                  "|",
+                  f"{info.get('width')}x{info.get('height')}",
+                  "|",
+                  "vcodec=" + str(info.get("vcodec")),
+                  "|",
+                  "acodec=" + str(info.get("acodec"))
               )
           PY
 
-      - name: Package as single-file HLS
+      # ------------------------------------------------------------
+      # 10. Package as single-file HLS
+      #
+      # If source is already:
+      # H264 -> copy video
+      # AAC  -> copy audio
+      #
+      # Otherwise codec is converted for TV/HLS compatibility,
+      # WITHOUT changing source resolution.
+      # ------------------------------------------------------------
+      - name: Package Episode 1 as single-file HLS
         shell: bash
         run: |
           set -euo pipefail
 
-          VIDEO_CODEC="$(ffprobe -v error -select_streams v:0 \
-            -show_entries stream=codec_name -of default=nw=1:nk=1 "$MEDIA_FILE")"
+          VIDEO_CODEC="$(ffprobe \
+            -v error \
+            -select_streams v:0 \
+            -show_entries stream=codec_name \
+            -of default=nw=1:nk=1 \
+            "$MEDIA_FILE")"
 
-          AUDIO_CODEC="$(ffprobe -v error -select_streams a:0 \
-            -show_entries stream=codec_name -of default=nw=1:nk=1 "$MEDIA_FILE" || true)"
+          AUDIO_CODEC="$(ffprobe \
+            -v error \
+            -select_streams a:0 \
+            -show_entries stream=codec_name \
+            -of default=nw=1:nk=1 \
+            "$MEDIA_FILE" || true)"
 
+          echo
           echo "Input video codec: $VIDEO_CODEC"
           echo "Input audio codec: ${AUDIO_CODEC:-none}"
+
+          rm -f \
+            "${BASENAME}.ts" \
+            "${BASENAME}.m3u8" \
+            "${BASENAME}.json"
 
           VIDEO_ARGS=(-c:v copy)
           AUDIO_ARGS=(-c:a copy)
 
-          # Preserve selected resolution. Only transcode codec when required
-          # for broad HLS/TV compatibility.
           if [ "$VIDEO_CODEC" != "h264" ]; then
-            VIDEO_ARGS=(-c:v libx264 -preset medium -crf 18)
+            echo "Video is not H.264."
+            echo "Transcoding codec only; resolution will be preserved."
+
+            VIDEO_ARGS=(
+              -c:v libx264
+              -preset medium
+              -crf 18
+            )
           fi
 
-          if [ -n "${AUDIO_CODEC:-}" ] && [ "$AUDIO_CODEC" != "aac" ]; then
-            AUDIO_ARGS=(-c:a aac -b:a 160k)
+          if [ -n "${AUDIO_CODEC:-}" ] && \
+             [ "$AUDIO_CODEC" != "aac" ]; then
+
+            echo "Audio is not AAC."
+            echo "Converting audio to AAC."
+
+            AUDIO_ARGS=(
+              -c:a aac
+              -b:a 160k
+            )
           fi
 
-          ffmpeg -y \
+          ffmpeg \
+            -y \
             -i "$MEDIA_FILE" \
             -map 0:v:0 \
             -map 0:a:0? \
@@ -180,12 +348,25 @@ jobs:
           test -s "${BASENAME}.m3u8"
 
           echo
-          echo "Generated HLS:"
-          ls -lh "${BASENAME}.ts" "${BASENAME}.m3u8"
-          echo
-          head -n 30 "${BASENAME}.m3u8"
+          echo "=========================================="
+          echo "HLS FILES CREATED"
+          echo "=========================================="
 
-      - name: Build Episode 1 metadata JSON
+          ls -lh \
+            "${BASENAME}.ts" \
+            "${BASENAME}.m3u8"
+
+          echo
+          echo "=========================================="
+          echo "M3U8 PREVIEW"
+          echo "=========================================="
+
+          head -n 40 "${BASENAME}.m3u8"
+
+      # ------------------------------------------------------------
+      # 11. Generate metadata JSON
+      # ------------------------------------------------------------
+      - name: Create AlKherbaS1E01.json
         shell: bash
         run: |
           set -euo pipefail
@@ -195,114 +376,253 @@ jobs:
           import os
           import subprocess
 
-          basename = os.environ["BASENAME"]
           media = os.environ["MEDIA_FILE"]
+          basename = os.environ["BASENAME"]
           source_url = os.environ["SOURCE_URL"]
 
           with open("source.info.json", "r", encoding="utf-8") as f:
               info = json.load(f)
 
-          def probe(selector):
-              cmd = [
-                  "ffprobe", "-v", "error",
-                  "-select_streams", selector,
-                  "-show_entries", "stream=codec_name,width,height,avg_frame_rate",
-                  "-of", "json",
-                  media,
-              ]
-              data = json.loads(subprocess.check_output(cmd, text=True))
+          def probe_stream(selector):
+
+              result = subprocess.check_output(
+                  [
+                      "ffprobe",
+                      "-v", "error",
+                      "-select_streams", selector,
+                      "-show_entries",
+                      "stream=codec_name,width,height,avg_frame_rate",
+                      "-of", "json",
+                      media
+                  ],
+                  text=True
+              )
+
+              data = json.loads(result)
+
               streams = data.get("streams", [])
+
               return streams[0] if streams else {}
 
-          def duration():
-              cmd = [
-                  "ffprobe", "-v", "error",
-                  "-show_entries", "format=duration",
-                  "-of", "default=nw=1:nk=1",
-                  media,
-              ]
-              value = subprocess.check_output(cmd, text=True).strip()
+          def get_duration():
+
+              value = subprocess.check_output(
+                  [
+                      "ffprobe",
+                      "-v", "error",
+                      "-show_entries", "format=duration",
+                      "-of", "default=nw=1:nk=1",
+                      media
+                  ],
+                  text=True
+              ).strip()
+
               return float(value) if value else None
 
-          video = probe("v:0")
-          audio = probe("a:0")
+          video = probe_stream("v:0")
+          audio = probe_stream("a:0")
 
           requested = info.get("requested_formats") or []
-          selected_ids = [x.get("format_id") for x in requested if x.get("format_id")]
+
+          selected_video = next(
+              (
+                  x for x in requested
+                  if x.get("vcodec") not in (None, "none")
+              ),
+              {}
+          )
+
+          selected_audio = next(
+              (
+                  x for x in requested
+                  if x.get("acodec") not in (None, "none")
+                  and x.get("vcodec") in (None, "none")
+              ),
+              {}
+          )
+
+          selected_ids = [
+              x.get("format_id")
+              for x in requested
+              if x.get("format_id")
+          ]
+
           if not selected_ids and info.get("format_id"):
               selected_ids = [info["format_id"]]
 
-          selected_video = next(
-              (x for x in requested if x.get("vcodec") not in (None, "none")),
-              {}
-          )
-          selected_audio = next(
-              (x for x in requested if x.get("acodec") not in (None, "none")
-               and x.get("vcodec") in (None, "none")),
-              {}
-          )
-
           metadata = {
+
               "series": "Al Kherba",
+
               "season": 1,
+
               "episode": 1,
+
               "basename": basename,
+
               "source_url": source_url,
+
               "source_id": info.get("id"),
+
               "title": info.get("title"),
-              "duration_seconds": duration(),
-              "selection_policy": (
-                  "highest accessible resolution; at the same resolution prefer "
-                  "H.264/AVC video and AAC/MP4A audio; no resolution is hard-coded"
-              ),
+
+              "duration_seconds": get_duration(),
+
+              "selection_policy":
+                  "Highest accessible resolution. "
+                  "At the same resolution prefer H.264/AVC video "
+                  "and AAC/MP4A audio. No resolution is hard-coded.",
+
               "selected_format_ids": selected_ids,
-              "selected_video_format_id": selected_video.get("format_id"),
-              "selected_audio_format_id": selected_audio.get("format_id"),
-              "selected_source_height": selected_video.get("height") or video.get("height"),
-              "selected_source_width": selected_video.get("width") or video.get("width"),
-              "selected_source_vcodec": selected_video.get("vcodec"),
-              "selected_source_acodec": selected_audio.get("acodec"),
-              "packaged_width": video.get("width"),
-              "packaged_height": video.get("height"),
-              "packaged_video_codec": video.get("codec_name"),
-              "packaged_audio_codec": audio.get("codec_name"),
-              "ts_asset": f"{basename}.ts",
-              "playlist_asset": f"{basename}.m3u8",
-              "packaging": "HLS VOD using one MPEG-TS file with byte-range segments",
+
+              "selected_video_format_id":
+                  selected_video.get("format_id"),
+
+              "selected_audio_format_id":
+                  selected_audio.get("format_id"),
+
+              "selected_source_width":
+                  selected_video.get("width")
+                  or video.get("width"),
+
+              "selected_source_height":
+                  selected_video.get("height")
+                  or video.get("height"),
+
+              "selected_source_vcodec":
+                  selected_video.get("vcodec"),
+
+              "selected_source_acodec":
+                  selected_audio.get("acodec"),
+
+              "packaged_width":
+                  video.get("width"),
+
+              "packaged_height":
+                  video.get("height"),
+
+              "packaged_video_codec":
+                  video.get("codec_name"),
+
+              "packaged_audio_codec":
+                  audio.get("codec_name"),
+
+              "ts_asset":
+                  f"{basename}.ts",
+
+              "playlist_asset":
+                  f"{basename}.m3u8",
+
+              "packaging":
+                  "Single-file HLS VOD using MPEG-TS "
+                  "with byte-range segments"
           }
 
-          with open(f"{basename}.json", "w", encoding="utf-8") as f:
-              json.dump(metadata, f, ensure_ascii=False, indent=2)
+          with open(
+              f"{basename}.json",
+              "w",
+              encoding="utf-8"
+          ) as f:
+
+              json.dump(
+                  metadata,
+                  f,
+                  ensure_ascii=False,
+                  indent=2
+              )
+
               f.write("\n")
 
-          print(json.dumps(metadata, ensure_ascii=False, indent=2))
+          print(
+              json.dumps(
+                  metadata,
+                  ensure_ascii=False,
+                  indent=2
+              )
+          )
           PY
 
-      - name: Create release if needed
+      # ------------------------------------------------------------
+      # 12. Final verification
+      # ------------------------------------------------------------
+      - name: Verify final Episode 1 assets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -s "${BASENAME}.ts"
+          test -s "${BASENAME}.m3u8"
+          test -s "${BASENAME}.json"
+
+          echo
+          echo "=========================================="
+          echo "FINAL FILES"
+          echo "=========================================="
+
+          ls -lh \
+            "${BASENAME}.ts" \
+            "${BASENAME}.m3u8" \
+            "${BASENAME}.json"
+
+          echo
+          echo "=========================================="
+          echo "FINAL RESOLUTION"
+          echo "=========================================="
+
+          ffprobe \
+            -v error \
+            -select_streams v:0 \
+            -show_entries stream=width,height,codec_name \
+            -of default=nw=1 \
+            "$MEDIA_FILE"
+
+      # ------------------------------------------------------------
+      # 13. Create release if it does not exist
+      # ------------------------------------------------------------
+      - name: Create Al Kherba release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
-          if gh release view "$RELEASE_TAG" \
-              --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "Release $RELEASE_TAG already exists"
+          if gh release view \
+            "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            >/dev/null 2>&1
+          then
+
+            echo "Release already exists:"
+            echo "$RELEASE_TAG"
+
           else
-            gh release create "$RELEASE_TAG" \
+
+            echo "Creating release:"
+            echo "$RELEASE_TAG"
+
+            gh release create \
+              "$RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" \
               --title "Al Kherba Season 1 Media" \
               --notes "Media assets for Al Kherba Season 1."
+
           fi
 
-      - name: Upload only Episode 1 assets
+      # ------------------------------------------------------------
+      # 14. Upload ONLY E01
+      # ------------------------------------------------------------
+      - name: Upload Episode 1 to release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
-          gh release upload "$RELEASE_TAG" \
+          echo
+          echo "Uploading ONLY Episode 1..."
+
+          gh release upload \
+            "$RELEASE_TAG" \
             "${BASENAME}.ts" \
             "${BASENAME}.m3u8" \
             "${BASENAME}.json" \
@@ -310,7 +630,12 @@ jobs:
             --repo "$GITHUB_REPOSITORY"
 
           echo
-          echo "Uploaded only:"
-          echo "  ${BASENAME}.ts"
-          echo "  ${BASENAME}.m3u8"
-          echo "  ${BASENAME}.json"
+          echo "=========================================="
+          echo "SUCCESS"
+          echo "=========================================="
+          echo
+          echo "Uploaded:"
+          echo
+          echo "${BASENAME}.ts"
+          echo "${BASENAME}.m3u8"
+          echo "${BASENAME}.json"
