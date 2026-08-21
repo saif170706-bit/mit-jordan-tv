@@ -28462,6 +28462,42 @@ http://125.210.152.18:9090/live/HLJWSHD_H265.m3u8
 http://223.110.245.161/ott.js.chinamobile.com/PLTV/3/224/3221227492/index.m3u8
 #EXTINF:-1 tvg-name="黑龙江卫 (1080p)" group-title="Undefined",黑龙江卫 (1080p)
 http://183.207.248.71/cntv/live1/HD-2500k-1080P-heilongjiangstv/HD-2500k-1080P-heilongjiangstv
+#EXTINF:-1 type="series" tvg-type="series" tvg-name="السمكري S01E01" tvg-logo="https://raw.githubusercontent.com/saif170706-bit/qwerdfgjr/main/13_56_53Dang-fang-Rozegar19_09_27.jpg" group-title="Syrian Series",السمكري S01E01
+https://vod.ifilmtv.ir/hls/ar65532/,1,1_320,.mp4.urlset/master.m3u8
+
+#EXTINF:-1 type="series" tvg-type="series" tvg-name="السمكري S01E02" tvg-logo="https://raw.githubusercontent.com/saif170706-bit/qwerdfgjr/main/13_56_53Dang-fang-Rozegar19_09_27.jpg" group-title="Syrian Series",السمكري S01E02
+https://vod.ifilmtv.ir/hls/ar65532/,2,2_320,.mp4.urlset/master.m3u8
+
+#EXTINF:-1 type="series" tvg-type="series" tvg-name="السمكري S01E03" tvg-logo="https://raw.githubusercontent.com/saif170706-bit/qwerdfgjr/main/13_56_53Dang-fang-Rozegar19_09_27.jpg" group-title="Syrian Series",السمكري S01E03
+https://vod.ifilmtv.ir/hls/ar65532/,3,3_320,.mp4.urlset/master.m3u8
+
+#EXTINF:-1 type="series" tvg-type="series" tvg-name="السمكري S01E04" tvg-logo="https://raw.githubusercontent.com/saif170706-bit/qwerdfgjr/main/13_56_53Dang-fang-Rozegar19_09_27.jpg" group-title="Syrian Series",السمكري S01E04
+https://vod.ifilmtv.ir/hls/ar65532/,4,4_320,.mp4.urlset/master.m3u8
+
+#EXTINF:-1 type="series" tvg-type="series" tvg-name="السمكري S01E05" tvg-logo="https://raw.githubusercontent.com/saif170706-bit/qwerdfgjr/main/13_56_53Dang-fang-Rozegar19_09_27.jpg" group-title="Syrian Series",السمكري S01E05
+https://vod.ifilmtv.ir/hls/ar65532/,5,5_320,.mp4.urlset/master.m3u8
+
+#EXTINF:-1 type="series" tvg-type="series" tvg-name="السمكري S01E06" tvg-logo="https://raw.githubusercontent.com/saif170706-bit/qwerdfgjr/main/13_56_53Dang-fang-Rozegar19_09_27.jpg" group-title="Syrian Series",السمكري S01E06
+https://vod.ifilmtv.ir/hls/ar65532/,6,6_320,.mp4.urlset/master.m3u8
+
+#EXTINF:-1 type="series" tvg-type="series" tvg-name="السمكري S01E07" tvg-logo="https://raw.githubusercontent.com/saif170706-bit/qwerdfgjr/main/13_56_53Dang-fang-Rozegar19_09_27.jpg" group-title="Syrian Series",السمكري S01E07
+https://vod.ifilmtv.ir/hls/ar65532/,7,7_320,.mp4.urlset/master.m3u8
+
+# E08 missing for now — Dailymotion source
+
+#EXTINF:-1 type="series" tvg-type="series" tvg-name="السمكري S01E09" tvg-logo="https://raw.githubusercontent.com/saif170706-bit/qwerdfgjr/main/13_56_53Dang-fang-Rozegar19_09_27.jpg" group-title="Syrian Series",السمكري S01E09
+https://vod.ifilmtv.ir/hls/ar65532/,9,9_320,.mp4.urlset/master.m3u8
+
+#EXTINF:-1 type="series" tvg-type="series" tvg-name="السمكري S01E10" tvg-logo="https://raw.githubusercontent.com/saif170706-bit/qwerdfgjr/main/13_56_53Dang-fang-Rozegar19_09_27.jpg" group-title="Syrian Series",السمكري S01E10
+https://vod.ifilmtv.ir/hls/ar65532/,10,10_320,.mp4.urlset/master.m3u8
+
+#EXTINF:-1 type="series" tvg-type="series" tvg-name="السمكري S01E11" tvg-logo="https://raw.githubusercontent.com/saif170706-bit/qwerdfgjr/main/13_56_53Dang-fang-Rozegar19_09_27.jpg" group-title="Syrian Series",السمكري S01E11
+https://vod.ifilmtv.ir/hls/ar65532/,11,11_320,.mp4.urlset/master.m3u8
+
+#EXTINF:-1 type="series" tvg-type="series" tvg-name="السمكري S01E12" tvg-logo="https://raw.githubusercontent.com/saif170706-bit/qwerdfgjr/main/13_56_53Dang-fang-Rozegar19_09_27.jpg" group-title="Syrian Series",السمكري S01E12
+https://vod.ifilmtv.ir/hls/ar65532/,12,12_320,.mp4.urlset/master.m3u8
+
+# E13 missing for now — Dailymotion source
 #EXTINF:-1 tvg-name="Bien Sport 1" tvg-logo="https://raw.githubusercontent.com/saif170706-bit/qwerdfgjr/main/sports-1.jpg" group-title="Sport",Bien Sport 1
 yacine://1424
 #EXTINF:-1 tvg-name="Bien Sport 2" tvg-logo="https://raw.githubusercontent.com/saif170706-bit/qwerdfgjr/main/sport-2.png" group-title="Sport",Bien Sport 2
